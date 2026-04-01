@@ -196,16 +196,19 @@ body {
   width: 56px;
 }
 
-.sidebar.collapsed .logo,
+.sidebar.collapsed .logo {
+  display: none;
+}
+
 .sidebar.collapsed .sidebar-nav,
 .sidebar.collapsed .sidebar-footer {
-  opacity: 0;
-  pointer-events: none;
+  display: none;
 }
 
 .sidebar.collapsed .sidebar-header {
   justify-content: center;
-  padding: var(--spacing-lg) 0;
+  padding: var(--spacing-md);
+  border-bottom: none;
 }
 
 .sidebar.collapsed .sidebar-collapse-btn {
