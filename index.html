@@ -12,7 +12,10 @@
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <h1 class="logo">RunTrack</h1>
-        <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
+        <div class="sidebar-header-btns">
+          <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebarCollapse()">&#8249;</button>
+          <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
+        </div>
       </div>
       <nav class="sidebar-nav">
         <button class="nav-item active" data-tab="dashboard">Dashboard</button>
