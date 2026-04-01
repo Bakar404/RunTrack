@@ -83,7 +83,8 @@ body {
   top: 0;
   height: 100vh;
   z-index: 1000;
-  transition: transform 0.3s ease;
+  transition: width 0.25s ease, transform 0.3s ease;
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -160,6 +161,59 @@ body {
   margin-left: 280px;
   display: flex;
   flex-direction: column;
+  transition: margin-left 0.25s ease;
+}
+
+/* ── Sidebar collapse (desktop) ── */
+.sidebar-header-btns {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.sidebar-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--text2);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  line-height: 1;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-collapse-btn:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+/* Collapsed state */
+.sidebar.collapsed {
+  width: 56px;
+}
+
+.sidebar.collapsed .logo,
+.sidebar.collapsed .sidebar-nav,
+.sidebar.collapsed .sidebar-footer {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  padding: var(--spacing-lg) 0;
+}
+
+.sidebar.collapsed .sidebar-collapse-btn {
+  font-size: 22px;
+}
+
+body.sidebar-collapsed .main-content {
+  margin-left: 56px;
 }
 
 .top-header {
@@ -1064,8 +1118,16 @@ textarea.form-input {
     width: 240px;
   }
 
+  .sidebar.collapsed {
+    width: 56px;
+  }
+
   .main-content {
     margin-left: 240px;
+  }
+
+  body.sidebar-collapsed .main-content {
+    margin-left: 56px;
   }
 
   .container {
@@ -1129,6 +1191,10 @@ textarea.form-input {
 
   .sidebar-toggle {
     display: block;
+  }
+
+  .sidebar-collapse-btn {
+    display: none;
   }
 
   .menu-toggle {

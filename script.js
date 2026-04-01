@@ -1342,6 +1342,7 @@ function updateThemeIcon() {
 document.addEventListener('DOMContentLoaded', async () => {
   setTheme(getTheme());
   updateThemeIcon();
+  restoreSidebarState();
 
   await initializeData();
 
@@ -1378,4 +1379,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
+}
+
+function toggleSidebarCollapse() {
+  const sidebar = document.getElementById('sidebar');
+  const isCollapsed = sidebar.classList.toggle('collapsed');
+  document.body.classList.toggle('sidebar-collapsed', isCollapsed);
+  localStorage.setItem('runtrack_sidebar_collapsed', isCollapsed ? '1' : '');
+  const btn = document.getElementById('sidebarCollapseBtn');
+  if (btn) btn.innerHTML = isCollapsed ? '&#8250;' : '&#8249;';
+}
+
+function restoreSidebarState() {
+  if (localStorage.getItem('runtrack_sidebar_collapsed') === '1') {
+    document.getElementById('sidebar').classList.add('collapsed');
+    document.body.classList.add('sidebar-collapsed');
+    const btn = document.getElementById('sidebarCollapseBtn');
+    if (btn) btn.innerHTML = '&#8250;';
+  }
 }
