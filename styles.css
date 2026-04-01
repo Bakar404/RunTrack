@@ -858,6 +858,69 @@ textarea.form-input {
   margin-bottom: var(--spacing-xl);
 }
 
+/* Dashboard sections */
+.dash-section {
+  margin-bottom: var(--spacing-xl);
+}
+
+.dash-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text2);
+  margin-bottom: var(--spacing-lg);
+  padding-bottom: var(--spacing-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.race-banner {
+  background: rgba(var(--accent-rgb), 0.06);
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-xl) var(--spacing-2xl);
+  margin-bottom: var(--spacing-xl);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xl);
+}
+
+.race-banner-days {
+  font-size: 64px;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.race-banner-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 4px;
+}
+
+.race-banner-divider {
+  width: 1px;
+  height: 60px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+
+.stat-sublabel {
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: var(--spacing-sm);
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-xl);
+}
+
 /* Empty state */
 .empty-state {
   display: flex;
@@ -1101,6 +1164,18 @@ textarea.form-input {
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .race-banner {
+    padding: var(--spacing-lg);
+  }
+
+  .race-banner-days {
+    font-size: 48px;
+  }
+
   .modal-content {
     padding: var(--spacing-xl);
     max-width: 100%;
@@ -1143,7 +1218,21 @@ textarea.form-input {
   }
 
   .grid-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .grid-3 {
     grid-template-columns: 1fr;
+  }
+
+  .race-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-md);
+  }
+
+  .race-banner-divider {
+    display: none;
   }
 
   .effort-grid {

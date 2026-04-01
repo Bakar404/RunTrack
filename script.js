@@ -440,48 +440,111 @@ function renderDashboard() {
   const completionPct = totalRuns > 0 ? Math.round((completedRuns / totalRuns) * 100) : 0;
   const avgPace = (totalActualTime && totalActualMiles) ? calculatePace(totalActualMiles, totalActualTime) : '—';
 
+  // Current week snapshot
+  const currentWeek = activePlan.weeks.find(week => {
+    const ws = parseDate(week.startDate);
+    const we = new Date(ws); we.setDate(we.getDate() + 6);
+    return ws <= today && today <= we;
+  });
+  let thisWeekPlanned = 0, thisWeekActual = 0, thisWeekDone = 0, thisWeekTotal = 0;
+  let nextRun = null;
+  if (currentWeek) {
+    for (const run of currentWeek.runs) {
+      thisWeekPlanned += run.plannedDistance;
+      thisWeekTotal++;
+      if (runLog[run.date]) {
+        thisWeekActual += runLog[run.date].distance;
+        thisWeekDone++;
+      } else if (!nextRun && parseDate(run.date) >= today) {
+        nextRun = run;
+      }
+    }
+  }
+  const nextRunLabel = nextRun
+    ? `${dayOfWeek(parseDate(nextRun.date))}<br><span style="font-size:13px;color:var(--text2);">${runTypeLabel(nextRun.type)} · ${nextRun.plannedDistance} mi</span>`
+    : currentWeek ? `<span style="color:var(--success);">Week complete</span>` : '—';
+
+  const weekLabel = currentWeek
+    ? `Week ${currentWeek.weekNumber} &nbsp;·&nbsp; ${currentWeek.startDate}`
+    : 'Between weeks';
+
   document.getElementById('dashboardContent').innerHTML = `
-    <div class="view-header">
-      <h2>${activePlan.name}</h2>
-      <div style="font-size:13px;color:var(--text2);">${raceTypeLabel(activePlan.raceType)} · Race on ${activePlan.raceDate}</div>
+    <div class="view-header" style="margin-bottom:var(--spacing-xl);">
+      <div>
+        <h2>${activePlan.name}</h2>
+        <div style="font-size:13px;color:var(--text2);margin-top:4px;">${raceTypeLabel(activePlan.raceType)} · Race date: ${activePlan.raceDate}</div>
+      </div>
     </div>
-    <div class="grid-4">
-      <div class="stat-card">
-        <div class="stat-label">Days to Race</div>
-        <div class="stat-value">${daysToRace}</div>
+
+    <!-- Race countdown banner -->
+    <div class="race-banner">
+      <div>
+        <div class="race-banner-days">${daysToRace}</div>
+        <div class="race-banner-label">days to race</div>
       </div>
-      <div class="stat-card">
-        <div class="stat-label">Total Miles</div>
-        <div class="stat-value">${totalActualMiles.toFixed(1)}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Completion</div>
-        <div class="stat-value">${completionPct}%</div>
-        <div class="progress-bar" style="margin-top:8px;">
+      <div class="race-banner-divider"></div>
+      <div style="flex:1;padding-left:var(--spacing-xl);">
+        <div style="font-size:14px;color:var(--text2);margin-bottom:4px;">Overall progress</div>
+        <div style="font-size:20px;font-weight:700;">${completedRuns} of ${totalRuns} runs complete</div>
+        <div class="progress-bar" style="margin-top:10px;">
           <div class="progress-fill" style="width:${completionPct}%"></div>
         </div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Avg Pace</div>
-        <div class="stat-value" style="font-size:32px;">${avgPace}${avgPace !== '—' ? '<span style="font-size:14px;color:var(--text2);font-weight:400;margin-left:2px;">/mi</span>' : ''}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Current Streak</div>
-        <div class="stat-value">${currentStreak}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Longest Streak</div>
-        <div class="stat-value">${longestStreak}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Runs Completed</div>
-        <div class="stat-value">${completedRuns}<span style="font-size:20px;color:var(--text2);">/${totalRuns}</span></div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Total Planned</div>
-        <div class="stat-value">${totalPlannedMiles.toFixed(0)}<span style="font-size:16px;color:var(--text2);"> mi</span></div>
+        <div style="font-size:12px;color:var(--text2);margin-top:6px;">${completionPct}% · ${totalActualMiles.toFixed(1)} mi logged</div>
       </div>
     </div>
+
+    <!-- This Week -->
+    <div class="dash-section">
+      <div class="dash-section-title">This Week &nbsp;—&nbsp; ${weekLabel}</div>
+      <div class="grid-3">
+        <div class="stat-card">
+          <div class="stat-label">Runs</div>
+          <div class="stat-value">${thisWeekDone}<span style="font-size:20px;color:var(--text2);">/${thisWeekTotal}</span></div>
+          <div class="stat-sublabel">completed this week</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Miles</div>
+          <div class="stat-value">${thisWeekActual.toFixed(1)}<span style="font-size:20px;color:var(--text2);">/${thisWeekPlanned.toFixed(1)}</span></div>
+          <div class="stat-sublabel">logged / planned this week</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Next Run</div>
+          <div class="stat-value" style="font-size:22px;">${nextRunLabel}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plan Progress -->
+    <div class="dash-section">
+      <div class="dash-section-title">Plan Progress &nbsp;—&nbsp; all ${activePlan.weeks.length} weeks</div>
+      <div class="grid-4">
+        <div class="stat-card">
+          <div class="stat-label">Miles Logged</div>
+          <div class="stat-value">${totalActualMiles.toFixed(1)}</div>
+          <div class="stat-sublabel">of ${totalPlannedMiles.toFixed(0)} mi planned so far</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg Pace</div>
+          <div class="stat-value" style="font-size:32px;">${avgPace}${avgPace !== '—' ? '<span style="font-size:13px;color:var(--text2);font-weight:400;margin-left:2px;">/mi</span>' : ''}</div>
+          <div class="stat-sublabel">across all logged runs</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Current Streak</div>
+          <div class="stat-value">${currentStreak}<span style="font-size:16px;color:var(--text2);font-weight:400;"> run${currentStreak !== 1 ? 's' : ''}</span></div>
+          <div class="stat-sublabel">longest: ${longestStreak}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Completion</div>
+          <div class="stat-value">${completionPct}%</div>
+          <div class="progress-bar" style="margin-top:8px;">
+            <div class="progress-fill" style="width:${completionPct}%"></div>
+          </div>
+          <div class="stat-sublabel">${completedRuns} / ${totalRuns} runs</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts -->
     <div class="card">
       <div class="card-title">Long Run Progression</div>
       <div class="chart-container">
