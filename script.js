@@ -7,6 +7,13 @@ db.version(1).stores({
   plans: 'id, raceType, startDate, raceDate, createdAt',
   runs: 'id, planId, date, type'
 });
+db.version(2).stores({
+  plans: 'id, raceType, startDate, raceDate, createdAt',
+  runs: 'id, planId, date, type'
+}).upgrade(tx => {
+  // Regenerate default plan with corrected easy run distances (2 mi start, not 3)
+  return Promise.all([tx.table('plans').clear(), tx.table('runs').clear()]);
+});
 
 let appData = { plans: [], runs: [] };
 
@@ -117,7 +124,7 @@ function secondsToTimeString(seconds) {
 function calculatePace(distanceMiles, timeSeconds) {
   if (!distanceMiles || !timeSeconds) return '';
   const paceSeconds = Math.round(timeSeconds / distanceMiles);
-  return secondsToTimeString(paceSeconds) + '/mi';
+  return secondsToTimeString(paceSeconds);
 }
 
 function dayOfWeek(date) {
@@ -202,8 +209,8 @@ function generatePlanWeeks(startDate, raceDate, raceType, runDays, longRunDay) {
         type = 'easy';
         paceSec = 600;
         if (isTaper) distance = 3;
-        else if (isRecovery) distance = 3;
-        else distance = 3 + Math.min(4, Math.floor(w / 4));
+        else if (isRecovery) distance = 2;
+        else distance = 2 + Math.min(5, Math.floor(w / 3));
       }
 
       distance = Math.max(1, Math.round(distance * 2) / 2);
@@ -324,7 +331,6 @@ function renderDashboard() {
   if (data.plans.length === 0) {
     document.getElementById('dashboardContent').innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">🏃</div>
         <div class="empty-text">No training plans yet</div>
         <button class="btn btn-primary" onclick="showCreatePlanModal()">Create Your First Plan</button>
       </div>`;
@@ -347,13 +353,17 @@ function renderDashboard() {
 
   for (const week of activePlan.weeks) {
     let weekPlanned = 0, weekActual = 0;
-    const weekHasPast = week.runs.some(r => parseDate(r.date) <= today);
+    const weekHasStarted = parseDate(week.startDate) <= today;
 
     for (const run of week.runs) {
+      const runDate = parseDate(run.date);
       weekPlanned += run.plannedDistance;
-      if (parseDate(run.date) <= today) {
-        totalPlannedMiles += run.plannedDistance;
+
+      if (weekHasStarted) {
+        // Count all runs in any week that has started as expected
         totalRuns++;
+        if (runDate <= today) totalPlannedMiles += run.plannedDistance;
+
         if (runLog[run.date]) {
           const logged = runLog[run.date];
           totalActualMiles += logged.distance;
@@ -362,10 +372,13 @@ function renderDashboard() {
           completedRuns++;
           currentStreak++;
           longestStreak = Math.max(longestStreak, currentStreak);
-        } else {
+        } else if (runDate < today) {
+          // Strictly past and unlogged = missed, break streak
           currentStreak = 0;
         }
+        // Today's or future runs in a started week don't break the streak
       }
+
       if (run.type === 'long') {
         longRunProgression.push({
           week: week.weekNumber,
@@ -378,7 +391,7 @@ function renderDashboard() {
     weeklyMileage.push({
       week: week.weekNumber,
       planned: weekPlanned,
-      actual: weekHasPast ? weekActual : null
+      actual: weekHasStarted ? weekActual : null
     });
   }
 
@@ -408,7 +421,7 @@ function renderDashboard() {
       </div>
       <div class="stat-card">
         <div class="stat-label">Avg Pace</div>
-        <div class="stat-value" style="font-size:28px;">${avgPace}</div>
+        <div class="stat-value" style="font-size:32px;">${avgPace}${avgPace !== '—' ? '<span style="font-size:14px;color:var(--text2);font-weight:400;margin-left:2px;">/mi</span>' : ''}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Current Streak</div>
@@ -652,7 +665,7 @@ function renderSchedule() {
           </div>
           <div class="run-status">
             ${logEntry
-              ? `<span class="status-badge status-complete">Logged</span> <span class="pace-label">${pace}</span>`
+              ? `<span class="status-badge status-complete">Logged</span>${pace ? ` <span class="pace-label">${pace}/mi</span>` : ''}`
               : isToday
                 ? `<span class="status-badge status-today">Today</span>`
                 : isPast
@@ -686,7 +699,6 @@ function renderHistory() {
   if (data.runs.length === 0) {
     document.getElementById('historyContent').innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">🏃</div>
         <div class="empty-text">No runs logged yet</div>
         <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Your First Run</button>
       </div>`;
@@ -713,7 +725,7 @@ function renderHistory() {
         <td><span class="run-type-tag run-type-${run.type}">${runTypeLabel(run.type)}</span></td>
         <td><strong>${run.distance}</strong> mi</td>
         <td>${secondsToTimeString(run.time)}</td>
-        <td>${calculatePace(run.distance, run.time)}</td>
+        <td>${calculatePace(run.distance, run.time) || '—'}${calculatePace(run.distance, run.time) ? '/mi' : ''}</td>
         <td>${run.effort ? `<span class="effort-badge">${run.effort}/10</span>` : '—'}</td>
         <td class="notes-cell">${run.notes || '—'}</td>
       </tr>
@@ -734,7 +746,6 @@ function renderPlans() {
   if (data.plans.length === 0) {
     document.getElementById('plansContent').innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">🎯</div>
         <div class="empty-text">No training plans yet</div>
         <button class="btn btn-primary" onclick="showCreatePlanModal()">Create Your First Plan</button>
       </div>`;
