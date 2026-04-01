@@ -438,6 +438,8 @@ function renderDashboard() {
   }
 
   const completionPct = totalRuns > 0 ? Math.round((completedRuns / totalRuns) * 100) : 0;
+  const totalPlanRuns = activePlan.weeks.reduce((s, w) => s + w.runs.length, 0);
+  const overallPct = totalPlanRuns > 0 ? Math.round((completedRuns / totalPlanRuns) * 100) : 0;
   const avgPace = (totalActualTime && totalActualMiles) ? calculatePace(totalActualMiles, totalActualTime) : '—';
 
   // Current week snapshot
@@ -485,11 +487,11 @@ function renderDashboard() {
       <div class="race-banner-divider"></div>
       <div style="flex:1;padding-left:var(--spacing-xl);">
         <div style="font-size:14px;color:var(--text2);margin-bottom:4px;">Overall progress</div>
-        <div style="font-size:20px;font-weight:700;">${completedRuns} of ${totalRuns} runs complete</div>
+        <div style="font-size:20px;font-weight:700;">${completedRuns} of ${totalPlanRuns} runs complete</div>
         <div class="progress-bar" style="margin-top:10px;">
-          <div class="progress-fill" style="width:${completionPct}%"></div>
+          <div class="progress-fill" style="width:${overallPct}%"></div>
         </div>
-        <div style="font-size:12px;color:var(--text2);margin-top:6px;">${completionPct}% · ${totalActualMiles.toFixed(1)} mi logged</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:6px;">${overallPct}% · ${totalActualMiles.toFixed(1)} mi logged</div>
       </div>
     </div>
 
