@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RunTrack — Training Made Simple</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <h1 class="logo">RunTrack</h1>
+        <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-tab="dashboard">
+          <span class="nav-icon">📊</span> Dashboard
+        </button>
+        <button class="nav-item" data-tab="schedule">
+          <span class="nav-icon">📋</span> Schedule
+        </button>
+        <button class="nav-item" data-tab="history">
+          <span class="nav-icon">📈</span> History
+        </button>
+        <button class="nav-item" data-tab="plans">
+          <span class="nav-icon">🎯</span> Plans
+        </button>
+        <button class="nav-item" data-tab="settings">
+          <span class="nav-icon">⚙️</span> Settings
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="theme-toggle" onclick="toggleTheme()">Dark Mode</button>
+      </div>
+    </div>
+
+    <div class="main-content">
+      <header class="top-header">
+        <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+        <div class="header-info" id="headerInfo"></div>
+        <div class="header-spacer"></div>
+      </header>
+
+      <div class="container">
+        <!-- Dashboard -->
+        <div class="view active" id="dashboard">
+          <div id="dashboardContent"></div>
+        </div>
+
+        <!-- Schedule -->
+        <div class="view" id="schedule">
+          <div class="view-header">
+            <h2>Training Schedule</h2>
+            <div class="view-actions">
+              <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Unplanned</button>
+              <button class="btn btn-secondary" onclick="exportICS()">Export ICS</button>
+            </div>
+          </div>
+          <div id="scheduleContent"></div>
+        </div>
+
+        <!-- History -->
+        <div class="view" id="history">
+          <div class="view-header">
+            <h2>Run History</h2>
+            <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Run</button>
+          </div>
+          <div id="historyContent"></div>
+        </div>
+
+        <!-- Plans -->
+        <div class="view" id="plans">
+          <div class="view-header">
+            <h2>Training Plans</h2>
+            <button class="btn btn-primary" onclick="showCreatePlanModal()">+ New Plan</button>
+          </div>
+          <div id="plansContent"></div>
+        </div>
+
+        <!-- Settings -->
+        <div class="view" id="settings">
+          <div class="view-header">
+            <h2>Settings</h2>
+          </div>
+          <div id="settingsContent"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log Run Modal -->
+    <div class="modal" id="runLogModal">
+      <div class="modal-content">
+        <button class="modal-close" onclick="closeModal('runLogModal')">✕</button>
+        <h2 class="modal-title">Log Run</h2>
+        <form onsubmit="saveRunLog(event)">
+          <div class="form-group">
+            <label class="form-label">Date</label>
+            <input type="date" class="form-input" id="logDate" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Planned: <span id="logPlanned" style="color:var(--accent);font-weight:700;"></span></label>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Distance (miles)</label>
+            <input type="number" class="form-input" id="logDistance" step="0.1" min="0" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Time</label>
+            <input type="text" class="form-input" id="logTime" placeholder="mm:ss or h:mm:ss" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Perceived Effort (1–10)</label>
+            <div class="effort-grid" id="effortGrid"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Notes (optional)</label>
+            <textarea class="form-input" id="logNotes" rows="3"></textarea>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('runLogModal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="deleteLogBtn" style="display:none" onclick="deleteCurrentLog()">Delete</button>
+            <button type="submit" class="btn btn-primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Adjustment Modal -->
+    <div class="modal" id="adjustmentModal">
+      <div class="modal-content">
+        <button class="modal-close" onclick="closeModal('adjustmentModal')">✕</button>
+        <h2 class="modal-title">Redistribute Mileage?</h2>
+        <p id="adjustmentMessage" style="color:var(--text2);margin-bottom:16px;"></p>
+        <div id="adjustmentRuns" class="adjustment-runs"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('adjustmentModal')">Skip</button>
+          <button type="button" class="btn btn-primary" onclick="applyAdjustment()">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create/Edit Plan Modal -->
+    <div class="modal" id="createPlanModal">
+      <div class="modal-content">
+        <button class="modal-close" onclick="closeModal('createPlanModal')">✕</button>
+        <h2 class="modal-title" id="createPlanTitle">New Plan</h2>
+        <form onsubmit="savePlan(event)">
+          <div class="form-group">
+            <label class="form-label">Plan Name</label>
+            <input type="text" class="form-input" id="planName" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Race Type</label>
+            <select class="form-input" id="planRaceType" required>
+              <option value="">Select…</option>
+              <option value="5k">5K</option>
+              <option value="10k">10K</option>
+              <option value="half_marathon">Half Marathon</option>
+              <option value="marathon">Marathon</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Start Date</label>
+            <input type="date" class="form-input" id="planStartDate" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Race Date</label>
+            <input type="date" class="form-input" id="planRaceDate" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Run Days</label>
+            <div class="pill-group" id="runDaysPills"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Long Run Day</label>
+            <select class="form-input" id="planLongRunDay" required>
+              <option value="">Select…</option>
+              <option value="monday">Monday</option>
+              <option value="tuesday">Tuesday</option>
+              <option value="wednesday">Wednesday</option>
+              <option value="thursday">Thursday</option>
+              <option value="friday">Friday</option>
+              <option value="saturday">Saturday</option>
+              <option value="sunday">Sunday</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeModal('createPlanModal')">Cancel</button>
+            <button type="button" class="btn btn-danger" id="deletePlanBtn" style="display:none" onclick="deletePlan()">Delete</button>
+            <button type="submit" class="btn btn-primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div class="modal" id="importModal">
+      <div class="modal-content">
+        <button class="modal-close" onclick="closeModal('importModal')">✕</button>
+        <h2 class="modal-title">Import Data</h2>
+        <div class="form-group">
+          <label class="form-label">Import Mode</label>
+          <div class="pill-group">
+            <div class="pill active" data-mode="merge" onclick="setImportMode(this)">Merge</div>
+            <div class="pill" data-mode="replace" onclick="setImportMode(this)">Replace All</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">JSON File</label>
+          <input type="file" class="form-input" id="importFile" accept=".json" />
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('importModal')">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="performImport()">Import</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="fab" onclick="showLogUnplannedModal()">+</button>
+
+    <script src="script.js"></script>
+  </body>
+</html>
