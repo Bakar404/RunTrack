@@ -11,7 +11,13 @@ db.version(2).stores({
   plans: 'id, raceType, startDate, raceDate, createdAt',
   runs: 'id, planId, date, type'
 }).upgrade(tx => {
-  // Regenerate default plan with corrected easy run distances (2 mi start, not 3)
+  return Promise.all([tx.table('plans').clear(), tx.table('runs').clear()]);
+});
+db.version(3).stores({
+  plans: 'id, raceType, startDate, raceDate, createdAt',
+  runs: 'id, planId, date, type'
+}).upgrade(tx => {
+  // Replace generated plan with exact hard-coded schedule (Sat long runs, corrected distances)
   return Promise.all([tx.table('plans').clear(), tx.table('runs').clear()]);
 });
 
@@ -239,7 +245,41 @@ function generatePlan(config) {
 }
 
 function createDefaultPlan() {
-  return generatePlan({
+  // Exact schedule — long runs on Saturday, Mon/Wed easy runs
+  // [weekNum, weekStart, [[date, type, miles], ...]]
+  const schedule = [
+    [1,  '2026-03-30', [['2026-03-30','easy',2],   ['2026-04-01','easy',2],   ['2026-04-04','long',3]]],
+    [2,  '2026-04-06', [['2026-04-06','easy',2],   ['2026-04-08','easy',2.5], ['2026-04-11','long',4]]],
+    [3,  '2026-04-13', [['2026-04-13','easy',2.5], ['2026-04-15','easy',2.5], ['2026-04-18','long',5]]],
+    [4,  '2026-04-20', [['2026-04-20','easy',2.5], ['2026-04-22','easy',3],   ['2026-04-25','long',5]]],
+    [5,  '2026-04-27', [['2026-04-27','easy',3],   ['2026-04-29','easy',3],   ['2026-05-02','long',6]]],
+    [6,  '2026-05-04', [['2026-05-04','easy',3],   ['2026-05-06','easy',3],   ['2026-05-09','long',7]]],
+    [7,  '2026-05-11', [['2026-05-11','easy',3],   ['2026-05-13','easy',3.5], ['2026-05-16','long',7.5]]],
+    [8,  '2026-05-18', [['2026-05-18','easy',3],   ['2026-05-20','easy',3.5], ['2026-05-23','long',8]]],
+    [9,  '2026-05-25', [['2026-05-25','easy',3.5], ['2026-05-27','easy',3.5], ['2026-05-30','long',9]]],
+    [10, '2026-06-01', [['2026-06-01','easy',3.5], ['2026-06-03','easy',4],   ['2026-06-06','long',10]]],
+    [11, '2026-06-08', [['2026-06-08','easy',3.5], ['2026-06-10','easy',4],   ['2026-06-13','long',11]]],
+    [12, '2026-06-15', [['2026-06-15','easy',4],   ['2026-06-17','easy',4],   ['2026-06-20','long',12]]],
+    [13, '2026-06-22', [['2026-06-22','easy',3],   ['2026-06-24','easy',3],   ['2026-06-27','long',10]]],
+    [14, '2026-06-29', [['2026-06-29','easy',3],   ['2026-07-01','easy',3],   ['2026-07-04','long',8]]],
+    [15, '2026-07-06', [['2026-07-06','easy',2],   ['2026-07-08','easy',2],   ['2026-07-11','long',5]]],
+    [16, '2026-07-13', [['2026-07-13','easy',2],   ['2026-07-19','race',13.1]]],
+  ];
+
+  const weeks = schedule.map(([weekNumber, startDate, runs]) => ({
+    weekNumber,
+    startDate,
+    runs: runs.map(([date, type, dist]) => ({
+      id: generateUUID(),
+      date,
+      type,
+      plannedDistance: dist,
+      plannedTime: Math.round(dist * (type === 'long' ? 660 : 600)),
+      actualDistance: null, actualTime: null, effort: null, notes: ''
+    }))
+  }));
+
+  return {
     id: generateUUID(),
     name: 'Half Marathon 2026',
     raceType: 'half_marathon',
@@ -247,7 +287,9 @@ function createDefaultPlan() {
     raceDate: '2026-07-19',
     runDays: ['monday', 'wednesday', 'saturday'],
     longRunDay: 'saturday',
-  });
+    weeks,
+    createdAt: new Date().toISOString()
+  };
 }
 
 // ============================================================================
