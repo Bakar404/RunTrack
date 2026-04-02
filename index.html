@@ -5,102 +5,163 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#0a0f1e" />
     <title>RunTrack</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="apple-touch-icon" href="favicon.svg" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.min.js"></script>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <h1 class="logo">RunTrack</h1>
-        <div class="sidebar-header-btns">
-          <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebarCollapse()">&#8249;</button>
-          <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
+
+    <!-- Auth overlay — shown until Firebase resolves session -->
+    <div id="authOverlay" class="auth-overlay">
+      <div class="auth-card">
+        <div class="auth-logo">
+          <img src="favicon.svg" alt="RunTrack" width="40" height="40" />
+          <span>RunTrack</span>
         </div>
-      </div>
-      <nav class="sidebar-nav">
-        <button class="nav-item active" data-tab="dashboard">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-          Dashboard
-        </button>
-        <button class="nav-item" data-tab="schedule">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          Schedule
-        </button>
-        <button class="nav-item" data-tab="history">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
-          History
-        </button>
-        <button class="nav-item" data-tab="plans">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-          Plans
-        </button>
-        <button class="nav-item" data-tab="settings">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M5.34 18.66l-1.41 1.41M2 12h2M20 12h2M5.34 5.34l1.41 1.41M17.24 17.24l1.41 1.41M12 2v2M12 20v2"/></svg>
-          Settings
-        </button>
-      </nav>
-      <div class="sidebar-footer">
-        <button class="theme-toggle" onclick="toggleTheme()">Dark Mode</button>
+
+        <!-- Login form -->
+        <form id="loginForm" onsubmit="handleLogin(event)">
+          <h2 class="auth-title">Welcome back</h2>
+          <div class="form-group">
+            <label class="form-label">Username</label>
+            <input type="text" class="form-input" id="loginUsername" autocomplete="username" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" class="form-input" id="loginPassword" autocomplete="current-password" required />
+          </div>
+          <div id="loginError" class="auth-error"></div>
+          <button type="submit" class="btn btn-primary btn-full" id="loginBtn">Sign In</button>
+          <p class="auth-switch">Don't have an account? <a href="#" onclick="toggleAuthMode()">Create one</a></p>
+        </form>
+
+        <!-- Register form -->
+        <form id="registerForm" onsubmit="handleRegister(event)" style="display:none;">
+          <h2 class="auth-title">Create account</h2>
+          <div class="form-group">
+            <label class="form-label">Username</label>
+            <input type="text" class="form-input" id="registerUsername" autocomplete="username" required minlength="3" maxlength="24" pattern="[a-zA-Z0-9_]+" title="Letters, numbers and underscores only" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password</label>
+            <input type="password" class="form-input" id="registerPassword" autocomplete="new-password" required minlength="6" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm Password</label>
+            <input type="password" class="form-input" id="registerConfirm" autocomplete="new-password" required minlength="6" />
+          </div>
+          <div id="registerError" class="auth-error"></div>
+          <button type="submit" class="btn btn-primary btn-full" id="registerBtn">Create Account</button>
+          <p class="auth-switch">Already have an account? <a href="#" onclick="toggleAuthMode()">Sign in</a></p>
+        </form>
       </div>
     </div>
 
-    <div class="main-content">
-      <header class="top-header">
-        <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
-        <div class="header-info" id="headerInfo"></div>
-        <div class="header-spacer"></div>
-      </header>
+    <!-- App shell (hidden until auth resolves) -->
+    <div id="appShell" style="display:none; width:100%; display:none;">
 
-      <div class="container">
-        <!-- Dashboard -->
-        <div class="view active" id="dashboard">
-          <div id="dashboardContent"></div>
+      <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <h1 class="logo">RunTrack</h1>
+          <div class="sidebar-header-btns">
+            <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebarCollapse()">&#8249;</button>
+            <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
+          </div>
         </div>
+        <nav class="sidebar-nav">
+          <button class="nav-item active" data-tab="dashboard">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            Dashboard
+          </button>
+          <button class="nav-item" data-tab="schedule">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Schedule
+          </button>
+          <button class="nav-item" data-tab="history">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
+            History
+          </button>
+          <button class="nav-item" data-tab="plans">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+            Plans
+          </button>
+          <button class="nav-item" data-tab="settings">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M5.34 18.66l-1.41 1.41M2 12h2M20 12h2M5.34 5.34l1.41 1.41M17.24 17.24l1.41 1.41M12 2v2M12 20v2"/></svg>
+            Settings
+          </button>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="sidebar-user" id="sidebarUser"></div>
+          <button class="theme-toggle" onclick="toggleTheme()">Dark Mode</button>
+        </div>
+      </div>
 
-        <!-- Schedule -->
-        <div class="view" id="schedule">
-          <div class="view-header">
-            <h2>Training Schedule</h2>
-            <div class="view-actions">
-              <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Unplanned</button>
-              <button class="btn btn-secondary" onclick="exportICS()">Export ICS</button>
+      <div class="main-content">
+        <header class="top-header">
+          <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+          <div class="header-info" id="headerInfo"></div>
+          <div class="header-right">
+            <span id="headerUsername" class="header-username"></span>
+            <button class="btn-icon" onclick="logoutUser()" title="Sign out">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="container">
+          <!-- Dashboard -->
+          <div class="view active" id="dashboard">
+            <div id="dashboardContent"></div>
+          </div>
+
+          <!-- Schedule -->
+          <div class="view" id="schedule">
+            <div class="view-header">
+              <h2>Training Schedule</h2>
+              <div class="view-actions">
+                <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Unplanned</button>
+                <button class="btn btn-secondary" onclick="exportICS()">Export ICS</button>
+              </div>
             </div>
+            <div id="scheduleContent"></div>
           </div>
-          <div id="scheduleContent"></div>
-        </div>
 
-        <!-- History -->
-        <div class="view" id="history">
-          <div class="view-header">
-            <h2>Run History</h2>
-            <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Run</button>
+          <!-- History -->
+          <div class="view" id="history">
+            <div class="view-header">
+              <h2>Run History</h2>
+              <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Run</button>
+            </div>
+            <div id="historyContent"></div>
           </div>
-          <div id="historyContent"></div>
-        </div>
 
-        <!-- Plans -->
-        <div class="view" id="plans">
-          <div class="view-header">
-            <h2>Training Plans</h2>
-            <button class="btn btn-primary" onclick="showCreatePlanModal()">+ New Plan</button>
+          <!-- Plans -->
+          <div class="view" id="plans">
+            <div class="view-header">
+              <h2>Training Plans</h2>
+              <button class="btn btn-primary" onclick="showCreatePlanModal()">+ New Plan</button>
+            </div>
+            <div id="plansContent"></div>
           </div>
-          <div id="plansContent"></div>
-        </div>
 
-        <!-- Settings -->
-        <div class="view" id="settings">
-          <div class="view-header">
-            <h2>Settings</h2>
+          <!-- Settings -->
+          <div class="view" id="settings">
+            <div class="view-header">
+              <h2>Settings</h2>
+            </div>
+            <div id="settingsContent"></div>
           </div>
-          <div id="settingsContent"></div>
         </div>
       </div>
-    </div>
+
+    </div><!-- /appShell -->
 
     <!-- Log Run Modal -->
     <div class="modal" id="runLogModal">
