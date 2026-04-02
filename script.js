@@ -907,6 +907,7 @@ function renderSettings() {
        <div class="settings-stat">Last sync: <strong>${lastSyncText}</strong></div>
        <div class="settings-actions">
          <button class="btn btn-primary" id="fitbitSyncBtn" onclick="syncFitbitRuns()">Sync Now</button>
+         <button class="btn btn-secondary" id="fitbitRecalcBtn" onclick="recalcFitbitEffort()">Recalculate Effort</button>
          <button class="btn btn-danger" onclick="disconnectFitbit()">Disconnect</button>
        </div>`
     : `<div class="settings-stat" style="color:var(--text2)">Connect your Fitbit account to automatically import completed runs.</div>
@@ -1738,6 +1739,50 @@ async function syncFitbitRuns() {
   if (synced > 0) { renderDashboard(); renderSchedule(); renderHistory(); }
 
   return { synced };
+}
+
+async function recalcFitbitEffort() {
+  const btn = document.getElementById('fitbitRecalcBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+
+  const token = await getValidAccessToken();
+  if (!token) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Recalculate Effort'; }
+    return;
+  }
+
+  const data = getStorage();
+  // Find all fitbit-synced runs that lack HR data or have no effort score
+  const targets = data.runs.filter(r => r.fitbitId && r.effortSource !== 'manual' && (!r.avgHeartRate || !r.effort));
+  if (!targets.length) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Recalculate Effort'; }
+    alert('No runs need recalculation.');
+    return;
+  }
+
+  let updated = 0;
+  for (const run of targets) {
+    try {
+      const res = await fetch(`https://api.fitbit.com/1/user/-/activities/${run.fitbitId}.json`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const activity = json.activityLog || json;
+      run.avgHeartRate = activity.averageHeartRate || 0;
+      run.heartRateZones = activity.heartRateZones || [];
+      const autoEffort = calculateAutoEffort(run, data.runs);
+      if (autoEffort) { run.effort = autoEffort; run.effortSource = 'auto'; updated++; }
+    } catch (e) { /* skip this run */ }
+  }
+
+  if (updated > 0) {
+    setStorage(data);
+    renderDashboard(); renderSchedule(); renderHistory();
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Recalculate Effort'; }
+  alert(`Updated effort for ${updated} run${updated !== 1 ? 's' : ''}.`);
 }
 
 function toggleSidebarCollapse() {
