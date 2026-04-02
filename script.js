@@ -896,8 +896,29 @@ function renderPlans() {
 
 function renderSettings() {
   const data = getStorage();
+  const connected = isFitbitConnected();
+  const lastSync = localStorage.getItem('fitbit_last_sync');
+  const lastSyncText = lastSync
+    ? new Date(lastSync).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : 'Never';
+
+  const fitbitSection = connected
+    ? `<div class="settings-stat">Status: <strong style="color:var(--success)">Connected</strong></div>
+       <div class="settings-stat">Last sync: <strong>${lastSyncText}</strong></div>
+       <div class="settings-actions">
+         <button class="btn btn-primary" id="fitbitSyncBtn" onclick="syncFitbitRuns()">Sync Now</button>
+         <button class="btn btn-danger" onclick="disconnectFitbit()">Disconnect</button>
+       </div>`
+    : `<div class="settings-stat" style="color:var(--text2)">Connect your Fitbit account to automatically import completed runs.</div>
+       <div class="settings-actions">
+         <button class="btn btn-primary" onclick="connectFitbit()">Connect Fitbit</button>
+       </div>`;
 
   document.getElementById('settingsContent').innerHTML = `
+    <div class="settings-section">
+      <div class="settings-section-title">Fitbit</div>
+      ${fitbitSection}
+    </div>
     <div class="settings-section">
       <div class="settings-section-title">App Data</div>
       <div class="settings-stat">Total Plans: <strong>${data.plans.length}</strong></div>
@@ -1348,12 +1369,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await initializeData();
 
+  // Handle Fitbit OAuth redirect (if returning from Fitbit authorization)
+  const didConnect = await handleFitbitCallback();
+  if (didConnect) {
+    // Navigate to settings to show the connected state
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    const settingsBtn = document.querySelector('.nav-item[data-tab="settings"]');
+    if (settingsBtn) settingsBtn.classList.add('active');
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.getElementById('settings').classList.add('active');
+  }
+
   renderDashboard();
   renderSchedule();
   renderHistory();
   renderPlans();
   renderSettings();
   updateHeaderInfo();
+
+  // Auto-sync Fitbit if already connected
+  if (!didConnect && isFitbitConnected()) {
+    syncFitbitRuns();
+  }
 
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
@@ -1381,6 +1418,242 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
+}
+
+// ============================================================================
+// FITBIT INTEGRATION
+// ============================================================================
+
+const FITBIT_CLIENT_ID = '23VCWT';
+const FITBIT_REDIRECT_URI = (() => {
+  const u = new URL(window.location.href);
+  u.search = '';
+  u.hash = '';
+  return u.toString();
+})();
+
+function base64URLEncode(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+async function generateCodeVerifier() {
+  const buf = new Uint8Array(32);
+  crypto.getRandomValues(buf);
+  return base64URLEncode(buf);
+}
+
+async function generateCodeChallenge(verifier) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return base64URLEncode(digest);
+}
+
+async function connectFitbit() {
+  const verifier = await generateCodeVerifier();
+  const challenge = await generateCodeChallenge(verifier);
+  const stateBuf = new Uint8Array(8);
+  crypto.getRandomValues(stateBuf);
+  const state = base64URLEncode(stateBuf);
+
+  localStorage.setItem('fitbit_pkce_verifier', verifier);
+  localStorage.setItem('fitbit_oauth_state', state);
+
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: FITBIT_CLIENT_ID,
+    redirect_uri: FITBIT_REDIRECT_URI,
+    scope: 'activity',
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
+  });
+
+  window.location.href = 'https://www.fitbit.com/oauth2/authorize?' + params;
+}
+
+async function handleFitbitCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  const state = params.get('state');
+  if (!code) return false;
+
+  window.history.replaceState({}, '', window.location.pathname);
+
+  const storedState = localStorage.getItem('fitbit_oauth_state');
+  const verifier = localStorage.getItem('fitbit_pkce_verifier');
+  localStorage.removeItem('fitbit_oauth_state');
+  localStorage.removeItem('fitbit_pkce_verifier');
+
+  if (state !== storedState || !verifier) return false;
+
+  try {
+    const res = await fetch('https://api.fitbit.com/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: FITBIT_CLIENT_ID,
+        grant_type: 'authorization_code',
+        redirect_uri: FITBIT_REDIRECT_URI,
+        code,
+        code_verifier: verifier,
+      }),
+    });
+    if (!res.ok) return false;
+    saveFitbitTokens(await res.json());
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function saveFitbitTokens(tokens) {
+  localStorage.setItem('fitbit_access_token', tokens.access_token);
+  if (tokens.refresh_token) localStorage.setItem('fitbit_refresh_token', tokens.refresh_token);
+  localStorage.setItem('fitbit_token_expires', Date.now() + (tokens.expires_in || 28800) * 1000);
+}
+
+async function getValidAccessToken() {
+  const expires = parseInt(localStorage.getItem('fitbit_token_expires') || '0');
+  if (Date.now() < expires - 60000) return localStorage.getItem('fitbit_access_token');
+
+  const refreshToken = localStorage.getItem('fitbit_refresh_token');
+  if (!refreshToken) { disconnectFitbit(); return null; }
+
+  try {
+    const res = await fetch('https://api.fitbit.com/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: FITBIT_CLIENT_ID,
+      }),
+    });
+    if (!res.ok) { disconnectFitbit(); return null; }
+    const tokens = await res.json();
+    saveFitbitTokens(tokens);
+    return tokens.access_token;
+  } catch (e) {
+    return null;
+  }
+}
+
+function isFitbitConnected() {
+  return !!localStorage.getItem('fitbit_access_token');
+}
+
+function disconnectFitbit() {
+  ['fitbit_access_token', 'fitbit_refresh_token', 'fitbit_token_expires', 'fitbit_last_sync']
+    .forEach(k => localStorage.removeItem(k));
+  renderSettings();
+}
+
+async function syncFitbitRuns() {
+  const btn = document.getElementById('fitbitSyncBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+
+  const token = await getValidAccessToken();
+  if (!token) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; }
+    return { error: 'not_connected' };
+  }
+
+  const data = getStorage();
+  if (!data.plans.length) return { synced: 0 };
+  const plan = data.plans[0];
+
+  // Fetch all run activities since plan start
+  const allActivities = [];
+  let offset = 0;
+  try {
+    while (true) {
+      const url = new URL('https://api.fitbit.com/1/user/-/activities/list.json');
+      url.searchParams.set('afterDate', plan.startDate);
+      url.searchParams.set('sort', 'asc');
+      url.searchParams.set('limit', '100');
+      url.searchParams.set('offset', String(offset));
+
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) break;
+      const json = await res.json();
+      const batch = json.activities || [];
+      allActivities.push(...batch);
+      if (batch.length < 100) break;
+      offset += 100;
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; }
+    return { error: 'fetch_failed' };
+  }
+
+  // Filter to running activities
+  const RUN_TYPE_IDS = new Set([90009, 90013, 90015, 90001, 90003, 90024]);
+  const runActivities = allActivities.filter(a =>
+    RUN_TYPE_IDS.has(a.activityTypeId) ||
+    (a.activityName && /run|jog/i.test(a.activityName))
+  );
+
+  const runLog = {};
+  data.runs.forEach(r => { if (r.planId === plan.id) runLog[r.date] = r; });
+
+  let synced = 0;
+
+  for (const activity of runActivities) {
+    const date = activity.startTime.substring(0, 10);
+
+    let distanceMiles = activity.distance || 0;
+    const unit = (activity.distanceUnit || '').toLowerCase();
+    if (unit === 'kilometer' || unit === 'km') distanceMiles *= 0.621371;
+    distanceMiles = Math.round(distanceMiles * 100) / 100;
+    if (distanceMiles < 0.1) continue;
+
+    const durationSec = Math.round((activity.duration || 0) / 1000);
+
+    // Find planned run for this date
+    let plannedRun = null;
+    for (const week of plan.weeks) {
+      const found = week.runs.find(r => r.date === date);
+      if (found) { plannedRun = found; break; }
+    }
+    if (!plannedRun) continue;
+
+    if (runLog[date]) {
+      // Update only if originally synced from Fitbit (don't overwrite manual logs)
+      if (runLog[date].fitbitId) {
+        runLog[date].distance = distanceMiles;
+        runLog[date].time = durationSec;
+        synced++;
+      }
+      continue;
+    }
+
+    const newRun = {
+      id: generateUUID(),
+      planId: plan.id,
+      date,
+      type: plannedRun.type,
+      distance: distanceMiles,
+      time: durationSec,
+      effort: 0,
+      notes: 'Synced from Fitbit',
+      fitbitId: activity.logId,
+    };
+    data.runs.push(newRun);
+    runLog[date] = newRun;
+    synced++;
+  }
+
+  if (synced > 0) setStorage(data);
+  localStorage.setItem('fitbit_last_sync', new Date().toISOString());
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; }
+
+  renderSettings();
+  if (synced > 0) { renderDashboard(); renderSchedule(); renderHistory(); }
+
+  return { synced };
 }
 
 function toggleSidebarCollapse() {
