@@ -78,6 +78,129 @@ body {
 }
 
 /* ============================================================
+   Auth overlay
+   ============================================================ */
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-lg);
+}
+
+.auth-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: var(--spacing-2xl);
+  width: 100%;
+  max-width: 400px;
+  box-shadow: var(--shadow-lg);
+  animation: slideUp 0.3s ease;
+}
+
+.auth-logo {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
+}
+
+.auth-logo span {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.auth-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  margin-bottom: var(--spacing-xl);
+}
+
+.auth-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin-bottom: var(--spacing-md);
+  min-height: 18px;
+}
+
+.auth-switch {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text2);
+  margin-top: var(--spacing-lg);
+}
+
+.auth-switch a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.btn-full {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Header right side */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
+}
+
+.header-username {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  color: var(--text2);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition);
+}
+
+.btn-icon:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+/* Sidebar user info */
+.sidebar-user {
+  font-size: 13px;
+  color: var(--text2);
+  padding: var(--spacing-sm) 0;
+  margin-bottom: var(--spacing-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Whoop recovery colours */
+.whoop-green  { color: var(--success); }
+.whoop-amber  { color: var(--warning); }
+.whoop-red    { color: var(--danger); }
+
+/* ============================================================
    Sidebar (desktop)
    ============================================================ */
 .sidebar {
