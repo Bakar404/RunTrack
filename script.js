@@ -833,7 +833,7 @@ function renderHistory() {
         <td><strong>${run.distance}</strong> mi</td>
         <td>${secondsToTimeString(run.time)}</td>
         <td>${calculatePace(run.distance, run.time) || '—'}${calculatePace(run.distance, run.time) ? '/mi' : ''}</td>
-        <td>${run.effort ? `<span class="effort-badge">${run.effort}/10</span>` : '—'}</td>
+        <td>${run.effort ? `<span class="effort-badge" title="${run.effortSource === 'auto' ? 'Auto-calculated from Fitbit data' : 'Manually set'}">${run.effort}/10${run.effortSource === 'auto' ? ' ◆' : ''}</span>` : '—'}</td>
         <td class="notes-cell">${run.notes || '—'}</td>
       </tr>
     `;
@@ -915,6 +915,15 @@ function renderSettings() {
        </div>`;
 
   document.getElementById('settingsContent').innerHTML = `
+    <div class="settings-section">
+      <div class="settings-section-title">Profile</div>
+      <div class="settings-stat">
+        Age: <input type="number" id="userAgeInput" value="${getUserAge()}" min="10" max="100"
+          style="width:60px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);font-size:14px;"
+          onchange="saveUserAge(this.value)" />
+        <span style="color:var(--text2);font-size:12px;margin-left:8px;">Used for max HR calculation (effort scoring)</span>
+      </div>
+    </div>
     <div class="settings-section">
       <div class="settings-section-title">Fitbit</div>
       ${fitbitSection}
@@ -1062,6 +1071,7 @@ function saveRunLog(event) {
   runLog.distance = distance;
   runLog.time = time;
   runLog.effort = effort;
+  runLog.effortSource = effort ? 'manual' : 'none';
   runLog.notes = notes;
 
   const missedMileage = getMissedRuns(activePlan.id, dateStr).reduce((s, r) => s + r.plannedDistance, 0);
@@ -1548,6 +1558,62 @@ function disconnectFitbit() {
   renderSettings();
 }
 
+function getUserAge() {
+  return parseInt(localStorage.getItem('runtrack_user_age') || '23');
+}
+
+function saveUserAge(age) {
+  localStorage.setItem('runtrack_user_age', String(parseInt(age) || 23));
+}
+
+function calculateAutoEffort(run, allRuns) {
+  const maxHR = 220 - getUserAge();
+  const components = [];
+  const weights = [];
+
+  // Heart rate zone component (40%): % of run time in Cardio + Peak zones
+  if (run.heartRateZones && run.heartRateZones.length > 0) {
+    const totalMin = run.heartRateZones.reduce((s, z) => s + (z.minutes || 0), 0);
+    if (totalMin > 0) {
+      const hardMin = run.heartRateZones
+        .filter(z => z.name === 'Cardio' || z.name === 'Peak')
+        .reduce((s, z) => s + (z.minutes || 0), 0);
+      // 0% hard time → score 1, 100% hard time → score 10
+      components.push(Math.max(1, Math.min(10, Math.round(hardMin / totalMin * 9 + 1))));
+      weights.push(0.4);
+    }
+  }
+
+  // Average HR component (35%): HR as % of max HR, mapped 50%→1, 95%→10
+  if (run.avgHeartRate > 0) {
+    const ratio = run.avgHeartRate / maxHR;
+    components.push(Math.max(1, Math.min(10, Math.round((ratio - 0.5) / 0.45 * 9 + 1))));
+    weights.push(0.35);
+  }
+
+  // Pace component (25%): today's pace vs rolling avg of last 10 same-type runs
+  if (run.distance > 0 && run.time > 0) {
+    const pace = run.time / run.distance;
+    const past = allRuns
+      .filter(r => r.id !== run.id && r.type === run.type && r.distance > 0 && r.time > 0 && r.date < run.date)
+      .slice(-10);
+    if (past.length >= 3) {
+      const avgPace = past.reduce((s, r) => s + r.time / r.distance, 0) / past.length;
+      // paceRatio > 1 = faster than average = harder; mapped 0.8→1, 1.2→10
+      const paceRatio = avgPace / pace;
+      components.push(Math.max(1, Math.min(10, Math.round((paceRatio - 0.8) / 0.4 * 9 + 1))));
+      weights.push(0.25);
+    }
+  }
+
+  if (components.length === 0) return null;
+
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  return Math.max(1, Math.min(10, Math.round(
+    components.reduce((s, c, i) => s + c * (weights[i] / totalWeight), 0)
+  )));
+}
+
 async function syncFitbitRuns() {
   const btn = document.getElementById('fitbitSyncBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
@@ -1612,6 +1678,8 @@ async function syncFitbitRuns() {
     if (distanceMiles < 0.1) continue;
 
     const durationSec = Math.round((activity.duration || 0) / 1000);
+    const avgHeartRate = activity.averageHeartRate || 0;
+    const heartRateZones = activity.heartRateZones || [];
 
     // Find planned run for this date
     let plannedRun = null;
@@ -1629,6 +1697,12 @@ async function syncFitbitRuns() {
         runLog[date].distance = distanceMiles;
         runLog[date].time = durationSec;
         runLog[date].fitbitId = activity.logId;
+        runLog[date].avgHeartRate = avgHeartRate;
+        runLog[date].heartRateZones = heartRateZones;
+        if (runLog[date].effortSource !== 'manual') {
+          const autoEffort = calculateAutoEffort(runLog[date], data.runs);
+          if (autoEffort) { runLog[date].effort = autoEffort; runLog[date].effortSource = 'auto'; }
+        }
         synced++;
       }
       continue;
@@ -1641,10 +1715,15 @@ async function syncFitbitRuns() {
       type: plannedRun.type,
       distance: distanceMiles,
       time: durationSec,
+      avgHeartRate,
+      heartRateZones,
       effort: 0,
+      effortSource: 'none',
       notes: 'Synced from Fitbit',
       fitbitId: activity.logId,
     };
+    const autoEffort = calculateAutoEffort(newRun, data.runs);
+    if (autoEffort) { newRun.effort = autoEffort; newRun.effortSource = 'auto'; }
     data.runs.push(newRun);
     runLog[date] = newRun;
     synced++;
