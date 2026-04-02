@@ -1472,7 +1472,7 @@ async function connectFitbit() {
     response_type: 'code',
     client_id: FITBIT_CLIENT_ID,
     redirect_uri: FITBIT_REDIRECT_URI,
-    scope: 'activity',
+    scope: 'activity heartrate',
     code_challenge: challenge,
     code_challenge_method: 'S256',
     state,
