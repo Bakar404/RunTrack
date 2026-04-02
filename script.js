@@ -1588,12 +1588,14 @@ async function syncFitbitRuns() {
     return { error: 'fetch_failed' };
   }
 
-  // Filter to running activities
+  // Filter to running activities only — explicitly exclude walks/hikes/steps
   const RUN_TYPE_IDS = new Set([90009, 90013, 90015, 90001, 90003, 90024]);
-  const runActivities = allActivities.filter(a =>
-    RUN_TYPE_IDS.has(a.activityTypeId) ||
-    (a.activityName && /run|jog/i.test(a.activityName))
-  );
+  const runActivities = allActivities.filter(a => {
+    const name = (a.activityName || '').toLowerCase();
+    // Exclude anything whose name contains "walk", "hike", or "step"
+    if (/\b(walk|hike|step)/i.test(a.activityName)) return false;
+    return RUN_TYPE_IDS.has(a.activityTypeId) || /run|jog/i.test(name);
+  });
 
   const runLog = {};
   data.runs.forEach(r => { if (r.planId === plan.id) runLog[r.date] = r; });
@@ -1620,10 +1622,13 @@ async function syncFitbitRuns() {
     if (!plannedRun) continue;
 
     if (runLog[date]) {
-      // Update only if originally synced from Fitbit (don't overwrite manual logs)
-      if (runLog[date].fitbitId) {
+      // Update only if originally synced from Fitbit (don't overwrite manual logs),
+      // and only if the new activity is in the strict run type ID set (prevents
+      // a name-matched or misclassified activity from overwriting a real run)
+      if (runLog[date].fitbitId && RUN_TYPE_IDS.has(activity.activityTypeId)) {
         runLog[date].distance = distanceMiles;
         runLog[date].time = durationSec;
+        runLog[date].fitbitId = activity.logId;
         synced++;
       }
       continue;
