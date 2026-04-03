@@ -4,12 +4,12 @@
 // Replace these placeholder values with your Firebase project config.
 // Get them from: Firebase Console → Project Settings → General → Your apps → Config
 const FIREBASE_CONFIG = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId:             "YOUR_APP_ID"
+  apiKey:            "AIzaSyDDJCkZCqO9IWX17zJV85i_X3sx_WOjLNY",
+  authDomain:        "runtrack404.firebaseapp.com",
+  projectId:         "runtrack404",
+  storageBucket:     "runtrack404.firebasestorage.app",
+  messagingSenderId: "97566338423",
+  appId:             "1:97566338423:web:15c3d19017028f1a0cc572"
 };
 
 firebase.initializeApp(FIREBASE_CONFIG);
