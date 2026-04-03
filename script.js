@@ -428,6 +428,15 @@ function createDefaultPlan() {
 async function initializeData() {
   await loadFromDB();
   if (!appData.plans || appData.plans.length === 0) {
+    // Before creating a default plan, check if user has data in the old Dexie IndexedDB
+    const legacyData = await readLegacyIndexedDB();
+    if (legacyData && legacyData.plans && legacyData.plans.length > 0) {
+      appData = { plans: legacyData.plans, runs: legacyData.runs || [], whoopRecovery: null };
+      await persistToDB(appData);
+      deleteLegacyIndexedDB();
+      return;
+    }
+    // No legacy data — create the default plan
     appData = { plans: [], runs: [], whoopRecovery: null };
     const plan = createDefaultPlan();
     appData.plans.push(plan);
@@ -437,6 +446,42 @@ async function initializeData() {
     });
     await persistToDB(appData);
   }
+}
+
+// Read all records from the old Dexie-managed IndexedDB (RunTrackDB)
+function readLegacyIndexedDB() {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open('RunTrackDB');
+      req.onerror = () => resolve(null);
+      req.onsuccess = (e) => {
+        const idb = e.target.result;
+        const storeNames = Array.from(idb.objectStoreNames);
+        if (!storeNames.includes('plans') || !storeNames.includes('runs')) {
+          idb.close(); return resolve(null);
+        }
+        try {
+          const tx    = idb.transaction(['plans', 'runs'], 'readonly');
+          const plans = [], runs = [];
+          tx.objectStore('plans').openCursor().onsuccess = (ev) => {
+            const cursor = ev.target.result;
+            if (cursor) { plans.push(cursor.value); cursor.continue(); }
+          };
+          tx.objectStore('runs').openCursor().onsuccess = (ev) => {
+            const cursor = ev.target.result;
+            if (cursor) { runs.push(cursor.value); cursor.continue(); }
+          };
+          tx.oncomplete = () => { idb.close(); resolve({ plans, runs }); };
+          tx.onerror    = () => { idb.close(); resolve(null); };
+        } catch (_) { idb.close(); resolve(null); }
+      };
+      req.onupgradeneeded = (e) => { e.target.result.close(); resolve(null); };
+    } catch (_) { resolve(null); }
+  });
+}
+
+function deleteLegacyIndexedDB() {
+  try { indexedDB.deleteDatabase('RunTrackDB'); } catch (_) {}
 }
 
 // ============================================================================
