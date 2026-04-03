@@ -78,7 +78,7 @@ body {
 }
 
 /* ============================================================
-   Auth overlay
+   Landing / Auth page
    ============================================================ */
 .auth-overlay {
   position: fixed;
@@ -86,33 +86,115 @@ body {
   background: var(--bg);
   z-index: 9999;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--spacing-lg);
+  align-items: stretch;
+  overflow-y: auto;
 }
 
+/* ---- Hero (left column) ---- */
+.landing-hero {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 64px 56px;
+  background: linear-gradient(145deg, #0d1526 0%, var(--bg) 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+/* subtle grid texture */
+.landing-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(59,130,246,0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
+.landing-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 48px;
+}
+
+.landing-logo span {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.6px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.landing-headline {
+  font-size: clamp(36px, 4vw, 52px);
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  line-height: 1.1;
+  margin-bottom: 20px;
+  color: var(--text);
+}
+
+.landing-sub {
+  font-size: 16px;
+  color: var(--text2);
+  line-height: 1.6;
+  max-width: 380px;
+  margin-bottom: 44px;
+}
+
+.landing-features {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.landing-features li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.landing-features li svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* ---- Auth card (right column) ---- */
 .auth-card {
+  width: 420px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 56px 48px;
   background: var(--bg2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  padding: var(--spacing-2xl);
-  width: 100%;
-  max-width: 400px;
-  box-shadow: var(--shadow-lg);
+  border-left: 1px solid var(--border);
   animation: slideUp 0.3s ease;
+  overflow-y: auto;
 }
 
 .auth-logo {
   display: flex;
   align-items: center;
-  gap: var(--spacing-md);
+  gap: 10px;
   margin-bottom: var(--spacing-xl);
 }
 
 .auth-logo span {
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 800;
-  letter-spacing: -0.8px;
+  letter-spacing: -0.5px;
   background: linear-gradient(135deg, var(--accent), var(--accent2));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -120,9 +202,9 @@ body {
 }
 
 .auth-title {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.5px;
   margin-bottom: var(--spacing-xl);
 }
 
@@ -149,6 +231,43 @@ body {
 .btn-full {
   width: 100%;
   justify-content: center;
+}
+
+/* ---- Mobile: stack vertically ---- */
+@media (max-width: 768px) {
+  .auth-overlay {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .landing-hero {
+    padding: 48px 28px 36px;
+    flex: none;
+  }
+
+  .landing-headline {
+    font-size: 32px;
+  }
+
+  .landing-sub {
+    margin-bottom: 28px;
+  }
+
+  .landing-features {
+    gap: 12px;
+  }
+
+  .landing-features li {
+    font-size: 14px;
+  }
+
+  .auth-card {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding: 36px 24px 48px;
+    border-radius: 0;
+  }
 }
 
 /* Header right side */
