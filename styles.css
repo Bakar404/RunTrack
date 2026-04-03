@@ -664,30 +664,29 @@ html.light-mode .top-header {
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: var(--spacing-lg) var(--spacing-xl);
+  padding: var(--spacing-lg);
   text-align: center;
-  transition: var(--transition);
+  transition: border-color 0.15s ease;
 }
 
 .stat-card:hover {
-  border-color: rgba(var(--accent-rgb), 0.5);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.15), var(--shadow-md);
+  border-color: rgba(var(--accent-rgb), 0.4);
 }
 
 .stat-label {
   font-size: 11px;
   color: var(--text2);
   text-transform: uppercase;
-  letter-spacing: 0.6px;
-  margin-bottom: var(--spacing-md);
+  letter-spacing: 0.5px;
+  margin-bottom: var(--spacing-sm);
   font-weight: 600;
 }
 
 .stat-value {
-  font-size: 44px;
+  font-size: 38px;
   font-weight: 800;
   color: var(--accent);
-  letter-spacing: -2px;
+  letter-spacing: -1.5px;
   line-height: 1;
 }
 
@@ -1116,8 +1115,116 @@ textarea.form-input {
 }
 
 /* ============================================================
-   Settings
+   Settings — group/row layout
    ============================================================ */
+
+/* Used by Settings page (groups with dividers) */
+.settings-group {
+  padding: var(--spacing-lg) 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-group-last { border-bottom: none; }
+
+.settings-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--text2);
+  margin-bottom: var(--spacing-md);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: 6px 0;
+  min-height: 36px;
+}
+
+.settings-row-key {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.settings-row-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text2);
+  margin-left: 6px;
+}
+
+.settings-row-val {
+  font-size: 14px;
+  color: var(--text2);
+  text-align: right;
+}
+
+.settings-row-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  padding-top: var(--spacing-sm);
+}
+
+.settings-inline-input {
+  padding: 5px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  width: 72px;
+  transition: border-color 0.15s ease;
+}
+.settings-inline-input.wide { width: 220px; }
+.settings-inline-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-help {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.6;
+  margin-bottom: var(--spacing-md);
+}
+
+.settings-help code {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 11px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  word-break: break-all;
+}
+
+.device-badge-connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--success);
+  background: rgba(16,185,129,0.1);
+  padding: 3px 9px;
+  border-radius: 20px;
+}
+.device-badge-connected::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+
+/* Used by AI Planner and Devices page (card-style sections) */
 .settings-section {
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -1146,6 +1253,107 @@ textarea.form-input {
   flex-wrap: wrap;
   margin-top: var(--spacing-md);
 }
+
+/* ============================================================
+   Device cards (Devices tab)
+   ============================================================ */
+.devices-intro {
+  font-size: 14px;
+  color: var(--text2);
+  margin-bottom: var(--spacing-xl);
+  line-height: 1.6;
+}
+
+.device-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--spacing-md);
+  overflow: hidden;
+}
+
+.device-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-lg);
+  background: var(--bg2);
+  cursor: default;
+}
+
+.device-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.device-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.device-card-info { flex: 1; min-width: 0; }
+
+.device-card-name {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.device-card-tagline {
+  font-size: 13px;
+  color: var(--text2);
+  margin-top: 2px;
+}
+
+.device-badge-soon {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  background: var(--bg3);
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+.device-card-body {
+  padding: var(--spacing-lg);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.device-proxy-details {
+  margin-top: var(--spacing-md);
+}
+
+.device-proxy-details summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.device-proxy-details summary::-webkit-details-marker { display: none; }
+
+.device-proxy-details summary::before {
+  content: '›';
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.device-proxy-details[open] summary::before { transform: rotate(90deg); }
 
 /* ============================================================
    FAB

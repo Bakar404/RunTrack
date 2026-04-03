@@ -1031,81 +1031,129 @@ function renderPlans() {
 // RENDERING — SETTINGS
 // ============================================================================
 
-function renderSettings() {
-  const data         = getStorage();
-  const fitConnected = isFitbitConnected();
-  const whoopConn    = isWhoopConnected();
+function saveFitbitClientIdAndConnect() {
+  const id = document.getElementById('fitbitClientIdInput')?.value?.trim();
+  if (!id) { alert('Please enter your Fitbit Client ID.'); return; }
+  saveFitbitClientId(id);
+  connectFitbit();
+}
 
-  const fitLastSync  = localStorage.getItem(lsKey('fitbit_last_sync'));
+function saveWhoopCredsAndConnect() {
+  const clientId = document.getElementById('whoopClientIdInput')?.value?.trim();
+  const proxy    = document.getElementById('whoopProxyInput')?.value?.trim();
+  if (!clientId) { alert('Please enter your Whoop Client ID.'); return; }
+  if (!proxy)    { alert('Please enter your Whoop token proxy URL.'); return; }
+  saveWhoopClientId(clientId);
+  saveWhoopProxyUrl(proxy);
+  connectWhoop();
+}
+
+function renderSettings() {
+  const data          = getStorage();
+  const fitConnected  = isFitbitConnected();
+  const whoopConn     = isWhoopConnected();
+  const fitLastSync   = localStorage.getItem(lsKey('fitbit_last_sync'));
   const whoopLastSync = localStorage.getItem(lsKey('whoop_last_sync'));
+  const savedFitbitId = (currentUser && localStorage.getItem(lsKey('fitbit_client_id'))) || '';
+  const savedWhoopId  = (currentUser && localStorage.getItem(lsKey('whoop_client_id')))  || '';
+  const savedProxy    = (currentUser && localStorage.getItem(lsKey('whoop_proxy_url')))  || '';
 
   const syncText = (ts) => ts
     ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : 'Never';
 
-  const fitbitSection = fitConnected
-    ? `<div class="settings-stat">Status: <strong style="color:var(--success)">Connected</strong></div>
-       <div class="settings-stat">Last sync: <strong>${syncText(fitLastSync)}</strong></div>
-       <div class="settings-actions">
-         <button class="btn btn-primary" id="fitbitSyncBtn" onclick="syncFitbitRuns()">Sync Now</button>
-         <button class="btn btn-danger" onclick="disconnectFitbit()">Disconnect</button>
-       </div>`
-    : `<div class="settings-stat" style="color:var(--text2)">Connect your Fitbit to automatically import completed runs.</div>
-       <div class="settings-actions">
-         <button class="btn btn-primary" onclick="connectFitbit()">Connect Fitbit</button>
-       </div>`;
-
-  const whoopSection = whoopConn
-    ? `<div class="settings-stat">Status: <strong style="color:var(--success)">Connected</strong></div>
-       <div class="settings-stat">Last sync: <strong>${syncText(whoopLastSync)}</strong></div>
-       <div class="settings-actions">
-         <button class="btn btn-primary" id="whoopSyncBtn" onclick="syncWhoopData()">Sync Now</button>
-         <button class="btn btn-danger" onclick="disconnectWhoop()">Disconnect</button>
-       </div>`
-    : `<div class="settings-stat" style="color:var(--text2)">Connect your Whoop to see recovery score, HRV and RHR on your dashboard, and import runs.</div>
-       <div class="settings-actions">
-         <button class="btn btn-primary" onclick="connectWhoop()">Connect Whoop</button>
-       </div>`;
-
   document.getElementById('settingsContent').innerHTML = `
-    <div class="settings-section">
-      <div class="settings-section-title">Profile</div>
-      <div class="settings-stat">
-        Age: <input type="number" id="userAgeInput" value="${getUserAge()}" min="10" max="100"
-          style="width:60px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg3);color:var(--text);font-size:14px;"
-          onchange="saveUserAge(this.value)" />
-        <span style="color:var(--text2);font-size:12px;margin-left:8px;">Used for max HR calculation</span>
+    <div class="settings-group">
+      <div class="settings-group-label">Profile</div>
+      <div class="settings-row">
+        <span class="settings-row-key">Age <span class="settings-row-hint">for HR zone calculation</span></span>
+        <input type="number" class="settings-inline-input" id="userAgeInput" value="${getUserAge()}" min="10" max="100" onchange="saveUserAge(this.value)" />
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-key">Theme</span>
+        <button class="btn btn-secondary btn-sm" onclick="toggleTheme()">${getTheme() === 'light' ? 'Switch to dark' : 'Switch to light'}</button>
       </div>
     </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Fitbit</div>
-      ${fitbitSection}
+
+    <div class="settings-group">
+      <div class="settings-group-label">Fitbit</div>
+      ${fitConnected ? `
+      <div class="settings-row">
+        <span class="settings-row-key">Status</span>
+        <span class="device-badge-connected">Connected</span>
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-key">Last sync</span>
+        <span class="settings-row-val">${syncText(fitLastSync)}</span>
+      </div>
+      <div class="settings-row-actions">
+        <button class="btn btn-primary btn-sm" id="fitbitSyncBtn" onclick="syncFitbitRuns()">Sync Now</button>
+        <button class="btn btn-secondary btn-sm" onclick="disconnectFitbit()">Disconnect</button>
+      </div>
+      ` : `
+      <p class="settings-help">Enter your Fitbit app's Client ID to connect. Create one at <strong>dev.fitbit.com</strong> → Register an App (type: Personal, callback: <code>${FITBIT_REDIRECT_URI}</code>).</p>
+      <div class="settings-row">
+        <span class="settings-row-key">Client ID</span>
+        <input type="text" class="settings-inline-input wide" id="fitbitClientIdInput" value="${savedFitbitId}" placeholder="e.g. ABC123" autocomplete="off" />
+      </div>
+      <div class="settings-row-actions">
+        <button class="btn btn-primary btn-sm" onclick="saveFitbitClientIdAndConnect()">Connect Fitbit</button>
+      </div>
+      `}
     </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Whoop</div>
-      ${whoopSection}
+
+    <div class="settings-group">
+      <div class="settings-group-label">Whoop</div>
+      ${whoopConn ? `
+      <div class="settings-row">
+        <span class="settings-row-key">Status</span>
+        <span class="device-badge-connected">Connected</span>
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-key">Last sync</span>
+        <span class="settings-row-val">${syncText(whoopLastSync)}</span>
+      </div>
+      <div class="settings-row-actions">
+        <button class="btn btn-primary btn-sm" id="whoopSyncBtn" onclick="syncWhoopData()">Sync Now</button>
+        <button class="btn btn-secondary btn-sm" onclick="disconnectWhoop()">Disconnect</button>
+      </div>
+      ` : `
+      <p class="settings-help">Whoop requires a Client ID (from <strong>developer.whoop.com</strong>) and a token proxy URL. See the <strong>Devices</strong> tab for step-by-step setup.</p>
+      <div class="settings-row">
+        <span class="settings-row-key">Client ID</span>
+        <input type="text" class="settings-inline-input wide" id="whoopClientIdInput" value="${savedWhoopId}" placeholder="From developer.whoop.com" autocomplete="off" />
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-key">Proxy URL</span>
+        <input type="text" class="settings-inline-input wide" id="whoopProxyInput" value="${savedProxy}" placeholder="https://your-worker.workers.dev" autocomplete="off" />
+      </div>
+      <div class="settings-row-actions">
+        <button class="btn btn-primary btn-sm" onclick="saveWhoopCredsAndConnect()">Connect Whoop</button>
+      </div>
+      `}
     </div>
-    <div class="settings-section">
-      <div class="settings-section-title">App Data</div>
-      <div class="settings-stat">Total Plans: <strong>${data.plans.length}</strong></div>
-      <div class="settings-stat">Total Runs Logged: <strong>${data.runs.length}</strong></div>
-      <div class="settings-actions">
-        <button class="btn btn-secondary" onclick="exportData()">Export JSON</button>
-        <button class="btn btn-secondary" onclick="showImportModal()">Import JSON</button>
-        <button class="btn btn-danger" onclick="clearAllData()">Clear All Data</button>
+
+    <div class="settings-group">
+      <div class="settings-group-label">Data</div>
+      <div class="settings-row">
+        <span class="settings-row-key">Plans</span>
+        <span class="settings-row-val">${data.plans.length}</span>
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-key">Runs logged</span>
+        <span class="settings-row-val">${data.runs.length}</span>
+      </div>
+      <div class="settings-row-actions">
+        <button class="btn btn-secondary btn-sm" onclick="exportData()">Export JSON</button>
+        <button class="btn btn-secondary btn-sm" onclick="showImportModal()">Import JSON</button>
+        <button class="btn btn-danger btn-sm" onclick="clearAllData()">Clear all data</button>
       </div>
     </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Appearance</div>
-      <div class="settings-stat">Theme: <strong>${getTheme() === 'light' ? 'Light' : 'Dark'}</strong></div>
-      <div class="settings-actions">
-        <button class="btn btn-secondary" onclick="toggleTheme()">Toggle Theme</button>
-      </div>
-    </div>
-    <div class="settings-section">
-      <div class="settings-section-title">Account</div>
-      <div class="settings-actions">
-        <button class="btn btn-danger" onclick="logoutUser()">Sign Out</button>
+
+    <div class="settings-group settings-group-last">
+      <div class="settings-group-label">Account</div>
+      <div class="settings-row-actions">
+        <button class="btn btn-secondary btn-sm" onclick="logoutUser()">Sign out</button>
       </div>
     </div>
   `;
@@ -1545,6 +1593,11 @@ function toggleSidebar() {
 const FITBIT_CLIENT_ID   = '23VCWT';
 const FITBIT_REDIRECT_URI = (() => { const u = new URL(window.location.href); u.search = ''; u.hash = ''; return u.toString(); })();
 
+function getFitbitClientId() {
+  return (currentUser && localStorage.getItem(lsKey('fitbit_client_id'))) || FITBIT_CLIENT_ID;
+}
+function saveFitbitClientId(id) { localStorage.setItem(lsKey('fitbit_client_id'), id.trim()); }
+
 function base64URLEncode(buffer) {
   return btoa(String.fromCharCode(...new Uint8Array(buffer)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -1572,7 +1625,7 @@ async function connectFitbit() {
   localStorage.setItem(lsKey('fitbit_oauth_state'),   state);
 
   const params = new URLSearchParams({
-    response_type: 'code', client_id: FITBIT_CLIENT_ID,
+    response_type: 'code', client_id: getFitbitClientId(),
     redirect_uri: FITBIT_REDIRECT_URI, scope: 'activity heartrate',
     code_challenge: challenge, code_challenge_method: 'S256', state,
   });
@@ -1598,7 +1651,7 @@ async function handleFitbitCallback() {
     const res = await fetch('https://api.fitbit.com/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: FITBIT_CLIENT_ID, grant_type: 'authorization_code',
+      body: new URLSearchParams({ client_id: getFitbitClientId(), grant_type: 'authorization_code',
         redirect_uri: FITBIT_REDIRECT_URI, code, code_verifier: verifier }),
     });
     if (!res.ok) return false;
@@ -1624,7 +1677,7 @@ async function getValidFitbitToken() {
     const res = await fetch('https://api.fitbit.com/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: FITBIT_CLIENT_ID }),
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: getFitbitClientId() }),
     });
     if (!res.ok) { disconnectFitbit(); return null; }
     const tokens = await res.json();
@@ -1818,6 +1871,15 @@ const WHOOP_CLIENT_ID    = 'YOUR_WHOOP_CLIENT_ID';
 const WHOOP_REDIRECT_URI = FITBIT_REDIRECT_URI;
 const WHOOP_TOKEN_PROXY  = ''; // set to your proxy URL
 
+function getWhoopClientId() {
+  return (currentUser && localStorage.getItem(lsKey('whoop_client_id'))) || WHOOP_CLIENT_ID;
+}
+function saveWhoopClientId(id) { localStorage.setItem(lsKey('whoop_client_id'), id.trim()); }
+function getWhoopProxyUrl() {
+  return (currentUser && localStorage.getItem(lsKey('whoop_proxy_url'))) || WHOOP_TOKEN_PROXY;
+}
+function saveWhoopProxyUrl(url) { localStorage.setItem(lsKey('whoop_proxy_url'), url.trim()); }
+
 // Whoop sport IDs that are running activities
 const WHOOP_RUN_SPORT_IDS = new Set([0, 71, 126]);  // Running, Trail Run, Treadmill
 
@@ -1832,7 +1894,7 @@ async function connectWhoop() {
   localStorage.setItem(lsKey('whoop_oauth_state'),   state);
 
   const params = new URLSearchParams({
-    response_type: 'code', client_id: WHOOP_CLIENT_ID,
+    response_type: 'code', client_id: getWhoopClientId(),
     redirect_uri: WHOOP_REDIRECT_URI,
     scope: 'read:recovery read:workout offline',
     code_challenge: challenge, code_challenge_method: 'S256', state,
@@ -1855,12 +1917,12 @@ async function handleWhoopCallback() {
 
   if (state !== storedState || !verifier) return false;
 
-  const tokenEndpoint = WHOOP_TOKEN_PROXY || 'https://api.prod.whoop.com/oauth/oauth2/token';
+  const tokenEndpoint = getWhoopProxyUrl() || 'https://api.prod.whoop.com/oauth/oauth2/token';
   try {
     const res = await fetch(tokenEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: WHOOP_CLIENT_ID, grant_type: 'authorization_code',
+      body: new URLSearchParams({ client_id: getWhoopClientId(), grant_type: 'authorization_code',
         redirect_uri: WHOOP_REDIRECT_URI, code, code_verifier: verifier }),
     });
     if (!res.ok) return false;
@@ -1882,12 +1944,12 @@ async function getValidWhoopToken() {
   const refreshToken = localStorage.getItem(lsKey('whoop_refresh_token'));
   if (!refreshToken) { disconnectWhoop(); return null; }
 
-  const tokenEndpoint = WHOOP_TOKEN_PROXY || 'https://api.prod.whoop.com/oauth/oauth2/token';
+  const tokenEndpoint = getWhoopProxyUrl() || 'https://api.prod.whoop.com/oauth/oauth2/token';
   try {
     const res = await fetch(tokenEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: WHOOP_CLIENT_ID, grant_type: 'refresh_token', refresh_token: refreshToken }),
+      body: new URLSearchParams({ client_id: getWhoopClientId(), grant_type: 'refresh_token', refresh_token: refreshToken }),
     });
     if (!res.ok) { disconnectWhoop(); return null; }
     const tokens = await res.json();
@@ -2042,39 +2104,46 @@ async function syncWhoopData() {
 // ============================================================================
 
 function renderDevices() {
+  const iconWatch = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="3"/><path d="M11 8h2M11 12h2M11 16h2"/></svg>`;
+  const iconPulse = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`;
+  const iconRing  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/></svg>`;
+  const iconCompass = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>`;
+  const iconApple = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="5" width="10" height="14" rx="3"/><path d="M7 9H5M7 15H5M17 9h2M17 15h2"/></svg>`;
+
   const devices = [
     {
       id: 'fitbit',
       name: 'Fitbit',
-      logo: '⌚',
+      icon: iconWatch,
       tagline: 'Sync runs and heart rate zones automatically',
       connected: isFitbitConnected(),
       steps: [
         { title: 'Create a Fitbit developer app', body: `Go to <strong>dev.fitbit.com</strong> → Log In → <em>Register an App</em>.<br>Fill in:<ul><li><strong>Application Name:</strong> RunTrack (or any name)</li><li><strong>OAuth 2.0 Application Type:</strong> Personal</li><li><strong>Callback URL:</strong> <code>${location.origin}${location.pathname}</code></li><li><strong>Default Access Type:</strong> Read-Only</li></ul>Click Save. You'll see your <strong>OAuth 2.0 Client ID</strong>.` },
-        { title: 'Copy your Client ID into RunTrack', body: 'In <code>script.js</code> line 1, find <code>FITBIT_CLIENT_ID</code> and replace <code>23VCWT</code> with your own Client ID. Commit and push.' },
-        { title: 'Connect in Settings', body: 'Go to <strong>Settings → Fitbit → Connect Fitbit</strong>. You\'ll be redirected to Fitbit to approve access, then returned to RunTrack automatically.' },
-        { title: 'Sync', body: 'Hit <strong>Sync Now</strong> to import all runs since your plan start date. Future syncs happen automatically each time you open the app.' },
+        { title: 'Enter your Client ID in RunTrack', body: 'Go to <strong>Settings → Fitbit</strong> and paste your Client ID into the field, then click <strong>Connect Fitbit</strong>. No code changes needed.' },
+        { title: 'Approve and sync', body: 'You\'ll be redirected to Fitbit to approve access, then returned to RunTrack. Hit <strong>Sync Now</strong> to import all runs. Future syncs happen automatically on each app load.' },
       ],
-      notes: 'Fitbit uses pure PKCE OAuth — no server or client secret needed. Safe to use on a public static site.'
+      notes: 'Fitbit uses pure PKCE OAuth — no server or client secret needed. Safe for a public static site.'
     },
     {
       id: 'whoop',
       name: 'Whoop',
-      logo: '🩺',
-      tagline: 'Recovery score, HRV, resting HR + run import',
+      icon: iconPulse,
+      tagline: 'Recovery score, HRV, resting HR and run import',
       connected: isWhoopConnected(),
       steps: [
-        { title: 'Join the Whoop Developer Program', body: 'Go to <strong>developer.whoop.com</strong> → <em>Get Access</em>. Fill out the form (takes 1–2 days to approve for personal use).' },
-        { title: 'Create an app', body: `Once approved, create an app in the developer portal.<br>Set the <strong>Redirect URI</strong> to: <code>${location.origin}${location.pathname}</code><br>Request scopes: <code>read:recovery read:workout offline</code>.<br>Note your <strong>Client ID</strong> and <strong>Client Secret</strong>.` },
-        { title: 'Set up a token proxy (required)', body: 'Whoop requires a <strong>client secret</strong> for token exchange, which cannot be stored in a public website. You need a free serverless proxy:<br><br><strong>Option A — Cloudflare Worker (free):</strong><ol><li>Sign up at <strong>cloudflare.com</strong> → Workers</li><li>Create a new Worker and paste the proxy code (see below)</li><li>Add your Client ID and Secret as environment variables</li><li>Set <code>WHOOP_TOKEN_PROXY</code> in <code>script.js</code> to your Worker URL</li></ol><strong>Option B — Netlify Function (free):</strong> Same idea but via Netlify.' },
-        { title: 'Add your Client ID', body: 'In <code>script.js</code>, find <code>WHOOP_CLIENT_ID</code> and replace <code>YOUR_WHOOP_CLIENT_ID</code> with your real Client ID.' },
-        { title: 'Connect in Settings', body: 'Go to <strong>Settings → Whoop → Connect Whoop</strong>.' },
+        { title: 'Join the Whoop Developer Program', body: 'Go to <strong>developer.whoop.com</strong> → <em>Get Access</em>. Fill out the form — personal use approval usually takes 1–2 days.' },
+        { title: 'Create an app', body: `Once approved, create an app in the portal.<br>Set the <strong>Redirect URI</strong> to: <code>${location.origin}${location.pathname}</code><br>Request scopes: <code>read:recovery read:workout offline</code>.<br>Note your <strong>Client ID</strong> and <strong>Client Secret</strong>.` },
+        { title: 'Deploy a token proxy', body: 'Whoop requires a client secret for token exchange, which cannot be stored in a public website. Create a free Cloudflare Worker:<ol><li>Go to <strong>dash.cloudflare.com</strong> → Workers → Create Worker</li><li>Paste the proxy code below into the editor and deploy</li><li>In the Worker settings, add environment variables: <code>WHOOP_CLIENT_ID</code> and <code>WHOOP_CLIENT_SECRET</code> (mark as encrypted)</li><li>Copy the Worker URL (e.g. <code>https://whoop-proxy.you.workers.dev</code>)</li></ol>' },
+        { title: 'Connect in Settings', body: 'Go to <strong>Settings → Whoop</strong>, enter your Client ID and the Worker URL as the Proxy URL, then click <strong>Connect Whoop</strong>.' },
       ],
-      notes: 'The proxy worker code is ~20 lines. Ask AI Planner to generate it for you, or copy from the Whoop developer docs.',
+      notes: 'Your Client Secret is never stored in RunTrack — it lives only in your Cloudflare Worker environment variables.',
       proxyCode: `// Cloudflare Worker — Whoop token proxy
 // Set env vars: WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET
 export default {
   async fetch(request, env) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' } });
+    }
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
     const body = await request.text();
     const params = new URLSearchParams(body);
@@ -2085,13 +2154,9 @@ export default {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString()
     });
-    const data = await res.text();
-    return new Response(data, {
+    return new Response(await res.text(), {
       status: res.status,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      }
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   }
 };`
@@ -2099,94 +2164,89 @@ export default {
     {
       id: 'oura',
       name: 'Oura Ring',
-      logo: '💍',
+      icon: iconRing,
       tagline: 'Sleep, readiness score and activity data',
       connected: false,
       comingSoon: true,
       steps: [
         { title: 'Get an Oura API token', body: 'Go to <strong>cloud.ouraring.com/user/api-tokens</strong> → Create New Token. Copy the Personal Access Token.' },
-        { title: 'Oura integration — coming soon', body: 'RunTrack will support Oura readiness scores and sleep data on the dashboard. The Oura v2 API uses simple bearer tokens — no OAuth needed, making it the easiest device to integrate.' },
+        { title: 'Integration coming soon', body: 'RunTrack will support Oura readiness scores and sleep data on the dashboard. The Oura v2 API uses simple bearer tokens — no OAuth needed.' },
       ],
-      notes: 'Oura uses Personal Access Tokens (no OAuth flow). Integration is planned for a future release.'
+      notes: 'Oura uses Personal Access Tokens. Integration is planned for a future release.'
     },
     {
       id: 'garmin',
       name: 'Garmin',
-      logo: '🏃',
+      icon: iconCompass,
       tagline: 'Import runs from Garmin Connect',
       connected: false,
       comingSoon: true,
       steps: [
         { title: 'Garmin developer access', body: 'Garmin\'s API (<strong>developer.garmin.com/gc-developer-program</strong>) requires applying for the Health API program. Approval is needed before you can create an OAuth app.' },
-        { title: 'Alternative: export via Garmin Connect', body: 'Until native integration is added, you can export your activities from <strong>Garmin Connect → Activities → Export CSV</strong> and import the JSON via <strong>Settings → Import JSON</strong> after formatting.' },
+        { title: 'Alternative: export from Garmin Connect', body: 'Export your activities from <strong>Garmin Connect → Activities → Export CSV</strong> and import via <strong>Settings → Import JSON</strong> after formatting.' },
       ],
-      notes: 'Garmin\'s Health API approval process can take weeks. Integration is planned for a future release.'
+      notes: 'Garmin\'s Health API approval can take weeks. Native integration is planned for a future release.'
     },
     {
       id: 'apple',
       name: 'Apple Watch',
-      logo: '🍎',
+      icon: iconApple,
       tagline: 'Import workouts from Apple Health',
       connected: false,
       comingSoon: true,
       steps: [
-        { title: 'Export from Apple Health', body: 'On your iPhone: <strong>Health app → profile icon → Export All Health Data</strong>. This creates a ZIP with an XML file containing all workouts.' },
-        { title: 'Apple Health API — web limitation', body: 'Apple Health data is locked to native iOS apps. A web app cannot read it directly. The best path is a companion iOS shortcut that reads workouts and POSTs them to a webhook, or using a third-party bridge like <strong>Health Auto Export</strong> (App Store).' },
+        { title: 'Export from Apple Health', body: 'On your iPhone: <strong>Health app → profile icon → Export All Health Data</strong>. This creates a ZIP with an XML file of all workouts.' },
+        { title: 'Web limitation', body: 'Apple Health is locked to native iOS apps. The best approach is a companion iOS shortcut or a third-party bridge like <strong>Health Auto Export</strong> (App Store) that can POST workouts to a webhook.' },
       ],
-      notes: 'Full Apple Watch integration requires a native iOS app or a third-party bridge app. Web-based import via Health export XML is planned.'
+      notes: 'Full Apple Watch support requires a native iOS app or a third-party bridge. Web import is planned.'
     }
   ];
 
-  let html = `
-    <p style="color:var(--text2);font-size:14px;margin-bottom:var(--spacing-xl);">
-      Step-by-step instructions to connect your wearable device to RunTrack.
-    </p>`;
+  let html = `<p class="devices-intro">Set up your wearable to automatically sync runs and health metrics into RunTrack.</p>`;
 
   for (const device of devices) {
-    const connBadge = device.connected
-      ? `<span class="plan-active-tag" style="background:var(--success);">Connected</span>`
+    const statusBadge = device.connected
+      ? `<span class="device-badge-connected">Connected</span>`
       : device.comingSoon
-        ? `<span class="plan-active-tag" style="background:var(--bg3);color:var(--text2);">Coming Soon</span>`
+        ? `<span class="device-badge-soon">Coming soon</span>`
         : '';
 
     html += `
-    <div class="settings-section" id="device-${device.id}">
-      <div style="display:flex;align-items:center;gap:var(--spacing-md);margin-bottom:var(--spacing-md);">
-        <span style="font-size:28px;">${device.logo}</span>
-        <div style="flex:1;">
-          <div style="display:flex;align-items:center;gap:var(--spacing-sm);">
-            <div class="settings-section-title" style="margin-bottom:0;">${device.name}</div>
-            ${connBadge}
-          </div>
-          <div style="font-size:13px;color:var(--text2);margin-top:2px;">${device.tagline}</div>
+    <div class="device-card" id="device-${device.id}">
+      <div class="device-card-header">
+        <span class="device-icon">${device.icon}</span>
+        <div class="device-card-info">
+          <div class="device-card-name">${device.name} ${statusBadge}</div>
+          <div class="device-card-tagline">${device.tagline}</div>
         </div>
-        ${device.connected ? `<button class="btn btn-primary btn-sm" onclick="switchTab('settings')">Manage</button>` : ''}
-      </div>`;
+        ${device.connected ? `<button class="btn btn-secondary btn-sm" onclick="switchTab('settings')">Manage</button>` : ''}
+      </div>
+      <div class="device-card-body">`;
 
     device.steps.forEach((step, i) => {
       html += `
-      <div class="device-step">
-        <div class="device-step-num">${i + 1}</div>
-        <div>
-          <div class="device-step-title">${step.title}</div>
-          <div class="device-step-body">${step.body}</div>
-        </div>
-      </div>`;
+        <div class="device-step">
+          <div class="device-step-num">${i + 1}</div>
+          <div>
+            <div class="device-step-title">${step.title}</div>
+            <div class="device-step-body">${step.body}</div>
+          </div>
+        </div>`;
     });
 
     if (device.proxyCode) {
       html += `
-      <details style="margin-top:var(--spacing-md);">
-        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--accent);">Show Cloudflare Worker proxy code</summary>
-        <pre class="code-block">${device.proxyCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>
-      </details>`;
+        <details class="device-proxy-details">
+          <summary>Show Cloudflare Worker proxy code</summary>
+          <pre class="code-block">${device.proxyCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>
+        </details>`;
     }
 
     if (device.notes) {
       html += `<div class="device-note">${device.notes}</div>`;
     }
 
-    html += `</div>`;
+    html += `</div></div>`;
   }
 
   document.getElementById('devicesContent').innerHTML = html;
