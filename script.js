@@ -24,6 +24,7 @@ const auth = firebase.auth();
 const db   = firebase.firestore();
 
 // Enable offline persistence (keep app working when offline)
+db.settings({ cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED });
 db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
 
 let currentUser = null;
