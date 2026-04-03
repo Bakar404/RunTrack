@@ -1,4 +1,11 @@
 // ============================================================================
+// ANTHROPIC PROXY URL
+// ============================================================================
+// After deploying worker.js to Cloudflare Workers, paste the URL here.
+// e.g. 'https://runtrack-ai.YOUR_USER.workers.dev'
+const ANTHROPIC_PROXY_URL = 'https://runtrack-ai-proxy.ahmedabdelsalam404.workers.dev';
+
+// ============================================================================
 // FIREBASE CONFIGURATION
 // ============================================================================
 // Replace these placeholder values with your Firebase project config.
@@ -2188,44 +2195,13 @@ export default {
 // AI PLANNER
 // ============================================================================
 
-function getAnthropicKey() {
-  return currentUser ? localStorage.getItem(lsKey('anthropic_key')) || '' : '';
-}
-
-function saveAnthropicKey(key) {
-  localStorage.setItem(lsKey('anthropic_key'), key.trim());
-}
-
 function renderAI() {
-  const hasKey = !!getAnthropicKey();
-
   document.getElementById('aiContent').innerHTML = `
     <p style="color:var(--text2);font-size:14px;margin-bottom:var(--spacing-xl);">
-      Describe your goal and RunTrack will generate a personalised training plan using Claude AI.
+      Describe your goal and RunTrack will generate a personalised training plan using Claude AI — no setup required.
     </p>
 
-    ${!hasKey ? `
-    <div class="settings-section" style="border-color:var(--warning);background:rgba(245,158,11,0.05);">
-      <div class="settings-section-title">API Key Required</div>
-      <div class="settings-stat" style="margin-bottom:var(--spacing-md);">
-        To use the AI planner you need a free Anthropic API key.
-        <ol style="margin-top:var(--spacing-md);padding-left:var(--spacing-lg);line-height:2;">
-          <li>Go to <strong>console.anthropic.com</strong> and create an account</li>
-          <li>Click <strong>API Keys → Create Key</strong> and copy it</li>
-          <li>Paste it below — it's stored only in your browser</li>
-        </ol>
-      </div>
-      <div style="display:flex;gap:var(--spacing-sm);align-items:center;">
-        <input type="password" class="form-input" id="anthropicKeyInput" placeholder="sk-ant-…" style="max-width:340px;" />
-        <button class="btn btn-primary" onclick="saveAnthropicKeyAndRender()">Save Key</button>
-      </div>
-    </div>` : `
-    <div style="display:flex;align-items:center;gap:var(--spacing-sm);margin-bottom:var(--spacing-xl);">
-      <span style="color:var(--success);font-size:13px;font-weight:600;">✓ API key saved</span>
-      <button class="btn btn-secondary sm" onclick="clearAnthropicKey()">Remove key</button>
-    </div>`}
-
-    <div class="settings-section" ${!hasKey ? 'style="opacity:0.5;pointer-events:none;"' : ''}>
+    <div class="settings-section">
       <div class="settings-section-title">Describe Your Training Goal</div>
       <div class="form-group">
         <label class="form-label">Tell Claude what you need</label>
@@ -2240,22 +2216,10 @@ function renderAI() {
   `;
 }
 
-function saveAnthropicKeyAndRender() {
-  const val = document.getElementById('anthropicKeyInput')?.value?.trim();
-  if (!val || !val.startsWith('sk-ant-')) { alert('Please enter a valid Anthropic API key (starts with sk-ant-)'); return; }
-  saveAnthropicKey(val);
-  renderAI();
-}
-
-function clearAnthropicKey() {
-  localStorage.removeItem(lsKey('anthropic_key'));
-  renderAI();
-}
-
 async function generateAIPlan() {
-  const apiKey = getAnthropicKey();
   const prompt = document.getElementById('aiPrompt')?.value?.trim();
   if (!prompt) { alert('Please describe your training goal first.'); return; }
+  if (!ANTHROPIC_PROXY_URL) { alert('AI service is not configured yet. Please check back later.'); return; }
 
   const btn     = document.getElementById('aiGenerateBtn');
   const resultEl = document.getElementById('aiResult');
@@ -2303,14 +2267,9 @@ Rules:
 - Respond with ONLY the JSON object. No other text.`;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(ANTHROPIC_PROXY_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-allow-browser': 'true'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-opus-4-6',
         max_tokens: 8000,

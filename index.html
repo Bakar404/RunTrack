@@ -18,16 +18,45 @@
   </head>
   <body>
 
-    <!-- Auth overlay — shown until Firebase resolves session -->
+    <!-- Landing / Auth page — shown until Firebase resolves session -->
     <div id="authOverlay" class="auth-overlay">
-      <div class="auth-card">
-        <div class="auth-logo">
-          <img src="favicon.svg" alt="RunTrack" width="40" height="40" />
+
+      <!-- Left: hero / marketing -->
+      <div class="landing-hero">
+        <div class="landing-logo">
+          <img src="favicon.svg" alt="RunTrack" width="44" height="44" />
           <span>RunTrack</span>
         </div>
+        <h1 class="landing-headline">Train smarter.<br>Run further.</h1>
+        <p class="landing-sub">A personal running tracker built for athletes who take their training seriously.</p>
+        <ul class="landing-features">
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            <span>Track every run with pace, distance &amp; effort</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <span>AI-generated race training plans</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            <span>Sync with Fitbit, Whoop, Oura &amp; more</span>
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+            <span>Progress charts &amp; weekly mileage insights</span>
+          </li>
+        </ul>
+      </div>
 
+      <!-- Right: auth card -->
+      <div class="auth-card">
         <!-- Login form -->
         <form id="loginForm" onsubmit="handleLogin(event)">
+          <div class="auth-logo">
+            <img src="favicon.svg" alt="RunTrack" width="32" height="32" />
+            <span>RunTrack</span>
+          </div>
           <h2 class="auth-title">Welcome back</h2>
           <div class="form-group">
             <label class="form-label">Username</label>
@@ -44,6 +73,10 @@
 
         <!-- Register form -->
         <form id="registerForm" onsubmit="handleRegister(event)" style="display:none;">
+          <div class="auth-logo">
+            <img src="favicon.svg" alt="RunTrack" width="32" height="32" />
+            <span>RunTrack</span>
+          </div>
           <h2 class="auth-title">Create account</h2>
           <div class="form-group">
             <label class="form-label">Username</label>
@@ -62,6 +95,7 @@
           <p class="auth-switch">Already have an account? <a href="#" onclick="toggleAuthMode()">Sign in</a></p>
         </form>
       </div>
+
     </div>
 
     <!-- App shell (hidden until auth resolves) -->
