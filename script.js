@@ -770,20 +770,20 @@ function renderProgressChart(data) {
   const canvas = document.getElementById('progressChart');
   if (!canvas) return;
 
-  const accentColor  = getCSSVar('--accent')  || '#3b82f6';
-  const text2Color   = getCSSVar('--text2')   || '#cbd5e1';
-  const borderColor  = getCSSVar('--border')  || '#475569';
+  const successColor = getCSSVar('--success') || '#10b981';
+  const text2Color   = getCSSVar('--text2')   || '#94a3b8';
+  const borderColor  = getCSSVar('--border')  || '#2d3748';
 
   progressChartInstance = new Chart(canvas, {
     type: 'line',
     data: {
       labels: data.map(d => `Wk ${d.week}`),
       datasets: [
-        { label: 'Planned', data: data.map(d => d.planned), borderColor: text2Color, borderDash: [5, 5],
+        { label: 'Planned', data: data.map(d => d.planned), borderColor: `${text2Color}88`, borderDash: [5, 5],
           pointRadius: 3, fill: false, tension: 0.3, borderWidth: 1.5 },
-        { label: 'Actual',  data: data.map(d => d.running), borderColor: accentColor,
-          backgroundColor: `${accentColor}22`, pointBackgroundColor: accentColor,
-          pointRadius: 5, fill: true, tension: 0.3, borderWidth: 2,
+        { label: 'Actual',  data: data.map(d => d.running), borderColor: successColor,
+          backgroundColor: `${successColor}22`, pointBackgroundColor: successColor,
+          pointRadius: 5, fill: true, tension: 0.3, borderWidth: 2.5,
           spanGaps: false }
       ]
     },
@@ -804,9 +804,10 @@ function renderWeeklyMileageChart(data) {
   const canvas = document.getElementById('weeklyChart');
   if (!canvas) return;
 
+  const successColor = getCSSVar('--success') || '#10b981';
   const accentColor  = getCSSVar('--accent')  || '#3b82f6';
-  const text2Color   = getCSSVar('--text2')   || '#cbd5e1';
-  const borderColor  = getCSSVar('--border')  || '#475569';
+  const text2Color   = getCSSVar('--text2')   || '#94a3b8';
+  const borderColor  = getCSSVar('--border')  || '#2d3748';
 
   weeklyChartInstance = new Chart(canvas, {
     type: 'bar',
@@ -814,9 +815,9 @@ function renderWeeklyMileageChart(data) {
       labels: data.map(d => `Wk ${d.week}`),
       datasets: [
         { label: 'Planned', data: data.map(d => d.planned),
-          backgroundColor: `${text2Color}33`, borderColor: text2Color, borderWidth: 1 },
+          backgroundColor: `${accentColor}33`, borderColor: `${accentColor}88`, borderWidth: 1 },
         { label: 'Actual',  data: data.map(d => d.actual),
-          backgroundColor: `${accentColor}99`, borderColor: accentColor, borderWidth: 1 }
+          backgroundColor: `${successColor}bb`, borderColor: successColor, borderWidth: 1 }
       ]
     },
     options: {
@@ -1484,7 +1485,8 @@ function updateThemeIcon() {
 // ============================================================================
 
 function renderAll() {
-  renderDashboard(); renderSchedule(); renderHistory(); renderPlans(); renderSettings();
+  renderDashboard(); renderSchedule(); renderHistory(); renderPlans();
+  renderSettings(); renderAI(); renderDevices();
 }
 
 function switchTab(tab) {
@@ -1494,11 +1496,13 @@ function switchTab(tab) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   const targetView = document.getElementById(tab);
   if (targetView) targetView.classList.add('active');
-  if (tab === 'dashboard') renderDashboard();
-  else if (tab === 'schedule') renderSchedule();
-  else if (tab === 'history') renderHistory();
-  else if (tab === 'plans') renderPlans();
-  else if (tab === 'settings') renderSettings();
+  if      (tab === 'dashboard') renderDashboard();
+  else if (tab === 'schedule')  renderSchedule();
+  else if (tab === 'history')   renderHistory();
+  else if (tab === 'plans')     renderPlans();
+  else if (tab === 'settings')  renderSettings();
+  else if (tab === 'ai')        renderAI();
+  else if (tab === 'devices')   renderDevices();
 }
 
 function setupNavListeners() {
@@ -2023,6 +2027,358 @@ async function syncWhoopData() {
   if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; }
   renderSettings();
   if (synced > 0) { renderDashboard(); renderSchedule(); renderHistory(); }
+}
+
+// ============================================================================
+// DEVICES — setup guides
+// ============================================================================
+
+function renderDevices() {
+  const devices = [
+    {
+      id: 'fitbit',
+      name: 'Fitbit',
+      logo: '⌚',
+      tagline: 'Sync runs and heart rate zones automatically',
+      connected: isFitbitConnected(),
+      steps: [
+        { title: 'Create a Fitbit developer app', body: `Go to <strong>dev.fitbit.com</strong> → Log In → <em>Register an App</em>.<br>Fill in:<ul><li><strong>Application Name:</strong> RunTrack (or any name)</li><li><strong>OAuth 2.0 Application Type:</strong> Personal</li><li><strong>Callback URL:</strong> <code>${location.origin}${location.pathname}</code></li><li><strong>Default Access Type:</strong> Read-Only</li></ul>Click Save. You'll see your <strong>OAuth 2.0 Client ID</strong>.` },
+        { title: 'Copy your Client ID into RunTrack', body: 'In <code>script.js</code> line 1, find <code>FITBIT_CLIENT_ID</code> and replace <code>23VCWT</code> with your own Client ID. Commit and push.' },
+        { title: 'Connect in Settings', body: 'Go to <strong>Settings → Fitbit → Connect Fitbit</strong>. You\'ll be redirected to Fitbit to approve access, then returned to RunTrack automatically.' },
+        { title: 'Sync', body: 'Hit <strong>Sync Now</strong> to import all runs since your plan start date. Future syncs happen automatically each time you open the app.' },
+      ],
+      notes: 'Fitbit uses pure PKCE OAuth — no server or client secret needed. Safe to use on a public static site.'
+    },
+    {
+      id: 'whoop',
+      name: 'Whoop',
+      logo: '🩺',
+      tagline: 'Recovery score, HRV, resting HR + run import',
+      connected: isWhoopConnected(),
+      steps: [
+        { title: 'Join the Whoop Developer Program', body: 'Go to <strong>developer.whoop.com</strong> → <em>Get Access</em>. Fill out the form (takes 1–2 days to approve for personal use).' },
+        { title: 'Create an app', body: `Once approved, create an app in the developer portal.<br>Set the <strong>Redirect URI</strong> to: <code>${location.origin}${location.pathname}</code><br>Request scopes: <code>read:recovery read:workout offline</code>.<br>Note your <strong>Client ID</strong> and <strong>Client Secret</strong>.` },
+        { title: 'Set up a token proxy (required)', body: 'Whoop requires a <strong>client secret</strong> for token exchange, which cannot be stored in a public website. You need a free serverless proxy:<br><br><strong>Option A — Cloudflare Worker (free):</strong><ol><li>Sign up at <strong>cloudflare.com</strong> → Workers</li><li>Create a new Worker and paste the proxy code (see below)</li><li>Add your Client ID and Secret as environment variables</li><li>Set <code>WHOOP_TOKEN_PROXY</code> in <code>script.js</code> to your Worker URL</li></ol><strong>Option B — Netlify Function (free):</strong> Same idea but via Netlify.' },
+        { title: 'Add your Client ID', body: 'In <code>script.js</code>, find <code>WHOOP_CLIENT_ID</code> and replace <code>YOUR_WHOOP_CLIENT_ID</code> with your real Client ID.' },
+        { title: 'Connect in Settings', body: 'Go to <strong>Settings → Whoop → Connect Whoop</strong>.' },
+      ],
+      notes: 'The proxy worker code is ~20 lines. Ask AI Planner to generate it for you, or copy from the Whoop developer docs.',
+      proxyCode: `// Cloudflare Worker — Whoop token proxy
+// Set env vars: WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET
+export default {
+  async fetch(request, env) {
+    if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+    const body = await request.text();
+    const params = new URLSearchParams(body);
+    params.set('client_id', env.WHOOP_CLIENT_ID);
+    params.set('client_secret', env.WHOOP_CLIENT_SECRET);
+    const res = await fetch('https://api.prod.whoop.com/oauth/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+    const data = await res.text();
+    return new Response(data, {
+      status: res.status,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
+  }
+};`
+    },
+    {
+      id: 'oura',
+      name: 'Oura Ring',
+      logo: '💍',
+      tagline: 'Sleep, readiness score and activity data',
+      connected: false,
+      comingSoon: true,
+      steps: [
+        { title: 'Get an Oura API token', body: 'Go to <strong>cloud.ouraring.com/user/api-tokens</strong> → Create New Token. Copy the Personal Access Token.' },
+        { title: 'Oura integration — coming soon', body: 'RunTrack will support Oura readiness scores and sleep data on the dashboard. The Oura v2 API uses simple bearer tokens — no OAuth needed, making it the easiest device to integrate.' },
+      ],
+      notes: 'Oura uses Personal Access Tokens (no OAuth flow). Integration is planned for a future release.'
+    },
+    {
+      id: 'garmin',
+      name: 'Garmin',
+      logo: '🏃',
+      tagline: 'Import runs from Garmin Connect',
+      connected: false,
+      comingSoon: true,
+      steps: [
+        { title: 'Garmin developer access', body: 'Garmin\'s API (<strong>developer.garmin.com/gc-developer-program</strong>) requires applying for the Health API program. Approval is needed before you can create an OAuth app.' },
+        { title: 'Alternative: export via Garmin Connect', body: 'Until native integration is added, you can export your activities from <strong>Garmin Connect → Activities → Export CSV</strong> and import the JSON via <strong>Settings → Import JSON</strong> after formatting.' },
+      ],
+      notes: 'Garmin\'s Health API approval process can take weeks. Integration is planned for a future release.'
+    },
+    {
+      id: 'apple',
+      name: 'Apple Watch',
+      logo: '🍎',
+      tagline: 'Import workouts from Apple Health',
+      connected: false,
+      comingSoon: true,
+      steps: [
+        { title: 'Export from Apple Health', body: 'On your iPhone: <strong>Health app → profile icon → Export All Health Data</strong>. This creates a ZIP with an XML file containing all workouts.' },
+        { title: 'Apple Health API — web limitation', body: 'Apple Health data is locked to native iOS apps. A web app cannot read it directly. The best path is a companion iOS shortcut that reads workouts and POSTs them to a webhook, or using a third-party bridge like <strong>Health Auto Export</strong> (App Store).' },
+      ],
+      notes: 'Full Apple Watch integration requires a native iOS app or a third-party bridge app. Web-based import via Health export XML is planned.'
+    }
+  ];
+
+  let html = `
+    <p style="color:var(--text2);font-size:14px;margin-bottom:var(--spacing-xl);">
+      Step-by-step instructions to connect your wearable device to RunTrack.
+    </p>`;
+
+  for (const device of devices) {
+    const connBadge = device.connected
+      ? `<span class="plan-active-tag" style="background:var(--success);">Connected</span>`
+      : device.comingSoon
+        ? `<span class="plan-active-tag" style="background:var(--bg3);color:var(--text2);">Coming Soon</span>`
+        : '';
+
+    html += `
+    <div class="settings-section" id="device-${device.id}">
+      <div style="display:flex;align-items:center;gap:var(--spacing-md);margin-bottom:var(--spacing-md);">
+        <span style="font-size:28px;">${device.logo}</span>
+        <div style="flex:1;">
+          <div style="display:flex;align-items:center;gap:var(--spacing-sm);">
+            <div class="settings-section-title" style="margin-bottom:0;">${device.name}</div>
+            ${connBadge}
+          </div>
+          <div style="font-size:13px;color:var(--text2);margin-top:2px;">${device.tagline}</div>
+        </div>
+        ${device.connected ? `<button class="btn btn-primary btn-sm" onclick="switchTab('settings')">Manage</button>` : ''}
+      </div>`;
+
+    device.steps.forEach((step, i) => {
+      html += `
+      <div class="device-step">
+        <div class="device-step-num">${i + 1}</div>
+        <div>
+          <div class="device-step-title">${step.title}</div>
+          <div class="device-step-body">${step.body}</div>
+        </div>
+      </div>`;
+    });
+
+    if (device.proxyCode) {
+      html += `
+      <details style="margin-top:var(--spacing-md);">
+        <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--accent);">Show Cloudflare Worker proxy code</summary>
+        <pre class="code-block">${device.proxyCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>
+      </details>`;
+    }
+
+    if (device.notes) {
+      html += `<div class="device-note">${device.notes}</div>`;
+    }
+
+    html += `</div>`;
+  }
+
+  document.getElementById('devicesContent').innerHTML = html;
+}
+
+// ============================================================================
+// AI PLANNER
+// ============================================================================
+
+function getAnthropicKey() {
+  return currentUser ? localStorage.getItem(lsKey('anthropic_key')) || '' : '';
+}
+
+function saveAnthropicKey(key) {
+  localStorage.setItem(lsKey('anthropic_key'), key.trim());
+}
+
+function renderAI() {
+  const hasKey = !!getAnthropicKey();
+
+  document.getElementById('aiContent').innerHTML = `
+    <p style="color:var(--text2);font-size:14px;margin-bottom:var(--spacing-xl);">
+      Describe your goal and RunTrack will generate a personalised training plan using Claude AI.
+    </p>
+
+    ${!hasKey ? `
+    <div class="settings-section" style="border-color:var(--warning);background:rgba(245,158,11,0.05);">
+      <div class="settings-section-title">API Key Required</div>
+      <div class="settings-stat" style="margin-bottom:var(--spacing-md);">
+        To use the AI planner you need a free Anthropic API key.
+        <ol style="margin-top:var(--spacing-md);padding-left:var(--spacing-lg);line-height:2;">
+          <li>Go to <strong>console.anthropic.com</strong> and create an account</li>
+          <li>Click <strong>API Keys → Create Key</strong> and copy it</li>
+          <li>Paste it below — it's stored only in your browser</li>
+        </ol>
+      </div>
+      <div style="display:flex;gap:var(--spacing-sm);align-items:center;">
+        <input type="password" class="form-input" id="anthropicKeyInput" placeholder="sk-ant-…" style="max-width:340px;" />
+        <button class="btn btn-primary" onclick="saveAnthropicKeyAndRender()">Save Key</button>
+      </div>
+    </div>` : `
+    <div style="display:flex;align-items:center;gap:var(--spacing-sm);margin-bottom:var(--spacing-xl);">
+      <span style="color:var(--success);font-size:13px;font-weight:600;">✓ API key saved</span>
+      <button class="btn btn-secondary sm" onclick="clearAnthropicKey()">Remove key</button>
+    </div>`}
+
+    <div class="settings-section" ${!hasKey ? 'style="opacity:0.5;pointer-events:none;"' : ''}>
+      <div class="settings-section-title">Describe Your Training Goal</div>
+      <div class="form-group">
+        <label class="form-label">Tell Claude what you need</label>
+        <textarea class="form-input" id="aiPrompt" rows="5" placeholder="e.g. I'm training for my first half marathon. My race is on September 20th and today is April 3rd. I can run 3 days a week — Monday, Wednesday, and Saturday. I can currently run about 3 miles comfortably. Build me a plan."></textarea>
+      </div>
+      <div class="settings-actions">
+        <button class="btn btn-primary" id="aiGenerateBtn" onclick="generateAIPlan()">Generate Plan</button>
+      </div>
+    </div>
+
+    <div id="aiResult"></div>
+  `;
+}
+
+function saveAnthropicKeyAndRender() {
+  const val = document.getElementById('anthropicKeyInput')?.value?.trim();
+  if (!val || !val.startsWith('sk-ant-')) { alert('Please enter a valid Anthropic API key (starts with sk-ant-)'); return; }
+  saveAnthropicKey(val);
+  renderAI();
+}
+
+function clearAnthropicKey() {
+  localStorage.removeItem(lsKey('anthropic_key'));
+  renderAI();
+}
+
+async function generateAIPlan() {
+  const apiKey = getAnthropicKey();
+  const prompt = document.getElementById('aiPrompt')?.value?.trim();
+  if (!prompt) { alert('Please describe your training goal first.'); return; }
+
+  const btn     = document.getElementById('aiGenerateBtn');
+  const resultEl = document.getElementById('aiResult');
+  btn.disabled  = true; btn.textContent = 'Generating…';
+  resultEl.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:var(--spacing-lg) 0;">Claude is building your plan…</div>`;
+
+  const today = formatDate(getEstToday());
+
+  const systemPrompt = `You are a running coach AI inside RunTrack, a training app. The user will describe their goal and you must respond with ONLY a valid JSON object (no markdown, no explanation) matching this exact schema:
+
+{
+  "name": "Plan name",
+  "raceType": "5k" | "10k" | "half_marathon" | "marathon" | "custom",
+  "startDate": "YYYY-MM-DD",
+  "raceDate": "YYYY-MM-DD",
+  "runDays": ["monday","wednesday","saturday"],
+  "longRunDay": "saturday",
+  "weeks": [
+    {
+      "weekNumber": 1,
+      "startDate": "YYYY-MM-DD",
+      "runs": [
+        {
+          "id": "unique-id-1",
+          "date": "YYYY-MM-DD",
+          "type": "easy" | "long" | "race",
+          "plannedDistance": 3.0,
+          "plannedTime": 1800,
+          "actualDistance": null,
+          "actualTime": null,
+          "effort": null,
+          "notes": ""
+        }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Today is ${today}. Use realistic dates.
+- plannedTime is in seconds (distance × pace in sec/mile: easy=600, long=660, race=540).
+- Each run id must be a unique UUID v4 string.
+- The last week's last run should be type "race" on the raceDate.
+- Build a proper progressive training plan with taper weeks at the end.
+- Respond with ONLY the JSON object. No other text.`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-allow-browser': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-6',
+        max_tokens: 8000,
+        messages: [{ role: 'user', content: prompt }],
+        system: systemPrompt
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `API error ${res.status}`);
+    }
+
+    const data    = await res.json();
+    const rawText = data.content?.[0]?.text || '';
+
+    let plan;
+    try {
+      // Strip any accidental markdown fences
+      const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+      plan = JSON.parse(cleaned);
+    } catch (e) {
+      throw new Error('Claude returned unexpected output. Try rephrasing your prompt.');
+    }
+
+    // Assign fresh IDs and fill missing run IDs
+    plan.id        = generateUUID();
+    plan.createdAt = new Date().toISOString();
+    plan.weeks.forEach(week => {
+      week.runs.forEach(run => {
+        if (!run.id || run.id.length < 10) run.id = generateUUID();
+      });
+    });
+
+    // Show preview before saving
+    const totalRuns  = plan.weeks.reduce((s, w) => s + w.runs.length, 0);
+    const totalWeeks = plan.weeks.length;
+
+    resultEl.innerHTML = `
+      <div class="settings-section" style="border-color:var(--success);background:rgba(16,185,129,0.05);">
+        <div class="settings-section-title" style="color:var(--success);">Plan Generated</div>
+        <div style="font-size:22px;font-weight:700;margin-bottom:var(--spacing-sm);">${plan.name}</div>
+        <div style="color:var(--text2);font-size:14px;margin-bottom:var(--spacing-md);">
+          ${raceTypeLabel(plan.raceType)} · ${plan.startDate} → ${plan.raceDate}<br>
+          ${totalWeeks} weeks · ${totalRuns} runs · Long run day: ${plan.longRunDay}
+        </div>
+        <div style="color:var(--text2);font-size:13px;margin-bottom:var(--spacing-lg);">
+          Saving this will add the plan to your training plans. Your existing plan will remain active until you switch.
+        </div>
+        <div class="settings-actions">
+          <button class="btn btn-primary" onclick="saveAIPlan(${JSON.stringify(plan).replace(/"/g,'&quot;')})">Save Plan</button>
+          <button class="btn btn-secondary" onclick="renderAI()">Start Over</button>
+        </div>
+      </div>`;
+
+  } catch (e) {
+    resultEl.innerHTML = `<div class="settings-section" style="border-color:var(--danger);"><div style="color:var(--danger);font-size:14px;">${e.message}</div></div>`;
+  }
+
+  btn.disabled = false; btn.textContent = 'Generate Plan';
+}
+
+function saveAIPlan(plan) {
+  const data = getStorage();
+  data.plans.unshift(plan);
+  setStorage(data);
+  renderPlans();
+  switchTab('plans');
 }
 
 // ============================================================================
