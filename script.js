@@ -3,7 +3,7 @@
 // ============================================================================
 // After deploying worker.js to Cloudflare Workers, paste the URL here.
 // e.g. 'https://runtrack-ai.YOUR_USER.workers.dev'
-const ANTHROPIC_PROXY_URL = 'https://runtrack-ai-proxy.ahmedabdelsalam404.workers.dev';
+const ANTHROPIC_PROXY_URL = 'https://run-track-claude.ahmedabdelsalam1202.workers.dev';
 
 // ============================================================================
 // FIREBASE CONFIGURATION
