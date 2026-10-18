@@ -194,6 +194,7 @@ function lsKey(key) {
 function getStorage() { return appData; }
 
 function setStorage(data) {
+  data.plans = sortPlans(data.plans || []);
   appData = data;
   persistToDB(data);
 }
@@ -201,11 +202,11 @@ function setStorage(data) {
 async function loadFromDB() {
   const uid = currentUser.uid;
   const [plansSnap, runsSnap] = await Promise.all([
-    db.collection('users').doc(uid).collection('plans').orderBy('createdAt').get(),
+    db.collection('users').doc(uid).collection('plans').get(),
     db.collection('users').doc(uid).collection('runs').get()
   ]);
   appData = {
-    plans: plansSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+    plans: sortPlans(plansSnap.docs.map(d => ({ id: d.id, ...d.data() }))),
     runs:  runsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
     whoopRecovery: appData.whoopRecovery || null
   };
@@ -290,12 +291,15 @@ function formatDisplayDate(dateStr, options = { weekday: 'short', month: 'short'
   return isValidDateString(dateStr) ? parseDate(dateStr).toLocaleDateString(undefined, options) : '';
 }
 
+// Parses "mm:ss", "h:mm:ss" or whole minutes ("45"). Returns NaN if invalid.
 function timeStringToSeconds(timeStr) {
-  if (!timeStr) return 0;
-  const parts = timeStr.trim().split(':');
-  if (parts.length === 2) return parseInt(parts[0]) * 60 + parseInt(parts[1]);
-  if (parts.length === 3) return parseInt(parts[0]) * 3600 + parseInt(parts[1]) * 60 + parseInt(parts[2]);
-  return 0;
+  const value = String(timeStr || '').trim();
+  if (/^\d{1,4}$/.test(value)) return Number(value) * 60;
+  const match = value.match(/^(?:(\d{1,2}):)?(\d{1,4}):(\d{2})$/);
+  if (!match) return NaN;
+  const [, h, m, sec] = match;
+  if (Number(sec) > 59 || (h !== undefined && Number(m) > 59)) return NaN;
+  return Number(h || 0) * 3600 + Number(m) * 60 + Number(sec);
 }
 
 function secondsToTimeString(seconds) {
@@ -335,6 +339,37 @@ function getCSSVar(name) {
 const RACE_TYPES   = ['5k', '10k', 'half_marathon', 'marathon', 'custom'];
 const WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const WEEK_ORDER   = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const DAY_SHORT    = { monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu', friday: 'Fri', saturday: 'Sat', sunday: 'Sun' };
+
+const RACE_DISTANCE_MI = { '5k': 3.1, '10k': 6.2, half_marathon: 13.1, marathon: 26.2, custom: 13.1 };
+const PACE_SEC_PER_MI  = { easy: 600, long: 660, race: 600 };
+const PLAN_MAX_WEEKS   = 30;
+// Week counts and distances (miles) used to build template plans for each race.
+const PLAN_RULES = {
+  '5k':          { minWeeks: 4,  recWeeks: 10, longStart: 3, longPeak: 6,  easyStart: 2, easyMax: 4 },
+  '10k':         { minWeeks: 6,  recWeeks: 12, longStart: 4, longPeak: 9,  easyStart: 2, easyMax: 5 },
+  half_marathon: { minWeeks: 8,  recWeeks: 16, longStart: 4, longPeak: 12, easyStart: 2, easyMax: 6 },
+  marathon:      { minWeeks: 12, recWeeks: 18, longStart: 6, longPeak: 20, easyStart: 3, easyMax: 8 },
+  custom:        { minWeeks: 4,  recWeeks: 12, longStart: 4, longPeak: 10, easyStart: 2, easyMax: 6 }
+};
+
+function capitalize(word) {
+  return word ? word[0].toUpperCase() + word.slice(1) : '';
+}
+
+// The active plan is always plans[0]: the most recently activated or created plan.
+function sortPlans(plans) {
+  const rank = plan => Number(plan.activatedAt) || Date.parse(plan.createdAt) || 0;
+  return [...plans].sort((a, b) => rank(b) - rank(a));
+}
+
+function daysToRaceText(raceDate) {
+  const days = daysBetween(formatDate(getToday()), raceDate);
+  if (days > 1)  return `${days} days to race`;
+  if (days === 1) return '1 day to race';
+  if (days === 0) return 'Race day';
+  return 'Race complete';
+}
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => (
@@ -379,122 +414,293 @@ function showToast(message, type = 'info', timeoutMs = 4500) {
 // PLAN GENERATION
 // ============================================================================
 
+function planWeekCount(startDate, raceDate) {
+  return Math.floor(daysBetween(startDate, raceDate) / 7) + 1;
+}
+
+// Build a template plan. Week N covers the 7 days starting at
+// startDate + 7 * (N - 1), and the last week ends with the race on raceDate.
 function generatePlanWeeks(startDate, raceDate, raceType, runDays, longRunDay) {
-  const start = parseDate(startDate);
-  const race  = parseDate(raceDate);
-  const totalWeeks = Math.max(1, Math.round((race - start) / (7 * 24 * 60 * 60 * 1000)));
-
-  const peakLongRun  = { '5k': 6, '10k': 9, 'half_marathon': 12, 'marathon': 20, 'custom': 10 };
-  const raceDistances = { '5k': 3.1, '10k': 6.2, 'half_marathon': 13.1, 'marathon': 26.2, 'custom': 13.1 };
-  const dayOffsets    = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
-
-  const peak      = peakLongRun[raceType] || 10;
-  const raceDist  = raceDistances[raceType] || 13.1;
-  const taperWeeks = Math.min(3, Math.floor(totalWeeks * 0.2));
+  const rules      = PLAN_RULES[raceType] || PLAN_RULES.custom;
+  const raceDist   = RACE_DISTANCE_MI[raceType] || RACE_DISTANCE_MI.custom;
+  const start      = parseDate(startDate);
+  const totalWeeks = Math.max(1, planWeekCount(startDate, raceDate));
+  const taperWeeks = totalWeeks >= 12 ? 3 : totalWeeks >= 6 ? 2 : 1;
   const buildWeeks = totalWeeks - taperWeeks;
+  const peakWeek   = buildWeeks - 1;
+
+  const makeRun = (date, type, distance) => ({
+    id: generateUUID(), date, type, plannedDistance: distance,
+    plannedTime: Math.round(distance * PACE_SEC_PER_MI[type]),
+    actualDistance: null, actualTime: null, effort: null, notes: ''
+  });
+
   const weeks = [];
-
   for (let w = 0; w < totalWeeks; w++) {
-    const weekStart = new Date(start);
-    weekStart.setDate(weekStart.getDate() + w * 7);
-
-    const isRecovery = w > 0 && (w + 1) % 4 === 0 && w < buildWeeks;
+    const weekStart  = addDays(start, w * 7);
+    const isRaceWeek = w === totalWeeks - 1;
     const isTaper    = w >= buildWeeks;
-    const weekRuns   = [];
+    const isRecovery = w > 0 && w < peakWeek && (w + 1) % 4 === 0;
+    const progress   = Math.min(w / Math.max(peakWeek, 1), 1);
+    const taperStep  = w - buildWeeks + 1;
+    const runs = [];
 
-    for (const day of runDays) {
-      let daysToAdd = dayOffsets[day] - weekStart.getDay();
-      if (daysToAdd < 0) daysToAdd += 7;
-      const runDate = new Date(weekStart);
-      runDate.setDate(runDate.getDate() + daysToAdd);
-      const dateStr = formatDate(runDate);
+    for (let offset = 0; offset < 7; offset++) {
+      const date    = addDays(weekStart, offset);
+      const dateStr = formatDate(date);
+      if (dateStr === raceDate) { runs.push(makeRun(dateStr, 'race', raceDist)); break; }
+      if (dateStr > raceDate) break;
 
-      if (dateStr === raceDate) {
-        weekRuns.push({ id: generateUUID(), date: dateStr, type: 'race', plannedDistance: raceDist,
-          plannedTime: Math.round(raceDist * 600), actualDistance: null, actualTime: null, effort: null, notes: '' });
-        continue;
-      }
+      const day = WEEKDAY_KEYS[date.getDay()];
+      if (!runDays.includes(day)) continue;
 
-      const isLongRunDay = day === longRunDay;
-      let distance, type, paceSec;
-
-      if (isLongRunDay) {
-        type = 'long'; paceSec = 660;
-        if (isTaper) {
-          const taperProgress = (w - buildWeeks) / Math.max(taperWeeks - 1, 1);
-          distance = peak * (1 - 0.4 * taperProgress);
-        } else if (isRecovery) {
-          distance = peak * 0.6;
-        } else {
-          const buildProgress = Math.min(w / Math.max(buildWeeks - 1, 1), 1);
-          distance = 4 + buildProgress * (peak - 4);
-        }
+      let type = 'easy', distance;
+      if (isRaceWeek) {
+        distance = daysBetween(dateStr, raceDate) <= 2 ? 2 : 3;
+      } else if (day === longRunDay) {
+        type = 'long';
+        distance = isTaper
+          ? rules.longPeak * (1 - 0.25 * taperStep)
+          : (rules.longStart + progress * (rules.longPeak - rules.longStart)) * (isRecovery ? 0.75 : 1);
       } else {
-        type = 'easy'; paceSec = 600;
-        if (isTaper) distance = 3;
-        else if (isRecovery) distance = 2;
-        else distance = 2 + Math.min(5, Math.floor(w / 3));
+        const easy = rules.easyStart + progress * (rules.easyMax - rules.easyStart);
+        distance = easy * (isTaper ? 1 - 0.2 * taperStep : isRecovery ? 0.75 : 1);
       }
-
-      distance = Math.max(1, Math.round(distance * 2) / 2);
-      weekRuns.push({ id: generateUUID(), date: dateStr, type, plannedDistance: distance,
-        plannedTime: Math.round(distance * paceSec), actualDistance: null, actualTime: null, effort: null, notes: '' });
+      runs.push(makeRun(dateStr, type, Math.max(1, Math.round(distance * 2) / 2)));
     }
 
-    weekRuns.sort((a, b) => a.date.localeCompare(b.date));
-    weeks.push({ weekNumber: w + 1, startDate: formatDate(weekStart), runs: weekRuns });
+    weeks.push({ weekNumber: w + 1, startDate: formatDate(weekStart), runs });
   }
   return weeks;
 }
 
-function generatePlan(config) {
-  return { ...config,
-    weeks: generatePlanWeeks(config.startDate, config.raceDate, config.raceType, config.runDays, config.longRunDay),
-    createdAt: new Date().toISOString()
-  };
+function defaultPlanName(raceType, raceDate) {
+  const when = formatDisplayDate(raceDate, { month: 'short', year: 'numeric' });
+  return `${when} ${raceTypeLabel(raceType)}`.trim();
 }
 
-function createDefaultPlan() {
-  const schedule = [
-    [1,  '2026-03-30', [['2026-03-30','easy',2],   ['2026-04-01','easy',2],   ['2026-04-04','long',3]]],
-    [2,  '2026-04-06', [['2026-04-06','easy',2],   ['2026-04-08','easy',2.5], ['2026-04-11','long',4]]],
-    [3,  '2026-04-13', [['2026-04-13','easy',2.5], ['2026-04-15','easy',2.5], ['2026-04-18','long',5]]],
-    [4,  '2026-04-20', [['2026-04-20','easy',2.5], ['2026-04-22','easy',3],   ['2026-04-25','long',5]]],
-    [5,  '2026-04-27', [['2026-04-27','easy',3],   ['2026-04-29','easy',3],   ['2026-05-02','long',6]]],
-    [6,  '2026-05-04', [['2026-05-04','easy',3],   ['2026-05-06','easy',3],   ['2026-05-09','long',7]]],
-    [7,  '2026-05-11', [['2026-05-11','easy',3],   ['2026-05-13','easy',3.5], ['2026-05-16','long',7.5]]],
-    [8,  '2026-05-18', [['2026-05-18','easy',3],   ['2026-05-20','easy',3.5], ['2026-05-23','long',8]]],
-    [9,  '2026-05-25', [['2026-05-25','easy',3.5], ['2026-05-27','easy',3.5], ['2026-05-30','long',9]]],
-    [10, '2026-06-01', [['2026-06-01','easy',3.5], ['2026-06-03','easy',4],   ['2026-06-06','long',10]]],
-    [11, '2026-06-08', [['2026-06-08','easy',4],   ['2026-06-10','easy',4],   ['2026-06-13','long',11]]],
-    [12, '2026-06-15', [['2026-06-15','easy',4],   ['2026-06-17','easy',4],   ['2026-06-20','long',12]]],
-    [13, '2026-06-22', [['2026-06-22','easy',4],   ['2026-06-24','easy',4],   ['2026-06-27','long',10]]],
-    [14, '2026-06-29', [['2026-06-29','easy',3.5], ['2026-07-01','easy',3.5], ['2026-07-04','long',8]]],
-    [15, '2026-07-06', [['2026-07-06','easy',3],   ['2026-07-08','easy',3],   ['2026-07-11','long',6]]],
-    [16, '2026-07-13', [['2026-07-13','easy',2],   ['2026-07-15','easy',2],   ['2026-07-19','race',13.1]]],
-  ];
+// Suggested race day: the recommended number of weeks out, on a weekend day.
+function recommendedRaceDate(startDate, raceType, longRunDay) {
+  const rules  = PLAN_RULES[raceType] || PLAN_RULES.custom;
+  const target = WEEKDAY_KEYS.indexOf(['saturday', 'sunday'].includes(longRunDay) ? longRunDay : 'sunday');
+  let date = addDays(parseDate(startDate), 7 * (rules.recWeeks - 1));
+  while (date.getDay() !== target) date = addDays(date, 1);
+  return formatDate(date);
+}
 
-  const weeks = schedule.map(([weekNumber, startDate, runs]) => ({
-    weekNumber,
-    startDate,
-    runs: runs.map(([date, type, plannedDistance]) => ({
-      id: generateUUID(), date, type, plannedDistance,
-      plannedTime: Math.round(plannedDistance * (type === 'long' ? 660 : 600)),
-      actualDistance: null, actualTime: null, effort: null, notes: ''
-    }))
-  }));
+const RACE_PHRASE = { '5k': '5K', '10k': '10K', half_marathon: 'half marathon', marathon: 'marathon', custom: 'custom' };
 
-  return {
-    id: generateUUID(),
-    name: 'Half Marathon 2026',
-    raceType: 'half_marathon',
-    startDate: '2026-03-30',
-    raceDate: '2026-07-19',
-    runDays: ['monday', 'wednesday', 'saturday'],
-    longRunDay: 'saturday',
-    createdAt: new Date().toISOString(),
-    weeks
+function planScheduleChanged(plan, input) {
+  return plan.raceType !== input.raceType || plan.startDate !== input.startDate ||
+    plan.raceDate !== input.raceDate || plan.longRunDay !== input.longRunDay ||
+    [...plan.runDays].sort().join() !== [...input.runDays].sort().join();
+}
+
+// Returns a user-facing error message, or '' when the input is valid. When
+// editing, the schedule rules only apply if the schedule would be rebuilt.
+function validatePlanInput(input, original = null) {
+  if (!RACE_TYPES.includes(input.raceType)) return 'Choose a race distance.';
+  if (original && !planScheduleChanged(original, input)) return '';
+  if (!isValidDateString(input.startDate)) return 'Choose the date your plan starts.';
+  if (!isValidDateString(input.raceDate)) return 'Choose your race day.';
+  if (input.raceDate <= input.startDate) return 'Race day must be after the plan start date.';
+  if ((!original || original.raceDate !== input.raceDate) && input.raceDate < formatDate(getToday())) {
+    return 'Race day is in the past. Choose an upcoming date.';
+  }
+  const weeks   = planWeekCount(input.startDate, input.raceDate);
+  const minimum = (PLAN_RULES[input.raceType] || PLAN_RULES.custom).minWeeks;
+  if (weeks < minimum) return `A ${RACE_PHRASE[input.raceType]} plan needs at least ${minimum} weeks. Move race day later or start earlier.`;
+  if (weeks > PLAN_MAX_WEEKS) return `Plans can be up to ${PLAN_MAX_WEEKS} weeks long. Start closer to race day.`;
+  if (input.runDays.length < 2) return 'Pick at least 2 days you can run.';
+  if (!input.runDays.includes(input.longRunDay)) return 'Pick a long run day from your run days.';
+  return '';
+}
+
+function planStatsMarkup(weeks) {
+  const runs     = weeks.flatMap(w => w.runs);
+  const longest  = runs.filter(r => r.type !== 'race').reduce((max, r) => Math.max(max, r.plannedDistance), 0);
+  const peakWeek = weeks.reduce((max, w) => Math.max(max, w.runs.reduce((sum, r) => sum + r.plannedDistance, 0)), 0);
+  return `
+    <div><strong>${weeks.length}</strong><span>weeks</span></div>
+    <div><strong>${runs.length}</strong><span>runs</span></div>
+    <div><strong>${longest}</strong><span>longest run (mi)</span></div>
+    <div><strong>${Math.round(peakWeek)}</strong><span>peak week (mi)</span></div>`;
+}
+
+function savePlanFromInput(input, existing) {
+  const data = getStorage();
+  const name = input.name || defaultPlanName(input.raceType, input.raceDate);
+  const schedule = () => generatePlanWeeks(input.startDate, input.raceDate, input.raceType, input.runDays, input.longRunDay);
+
+  if (existing) {
+    const plan = data.plans.find(p => p.id === existing.id);
+    if (!plan) return null;
+    const rebuild = planScheduleChanged(plan, input);
+    Object.assign(plan, {
+      name, raceType: input.raceType, startDate: input.startDate, raceDate: input.raceDate,
+      runDays: input.runDays, longRunDay: input.longRunDay
+    });
+    if (rebuild) { plan.weeks = schedule(); delete plan.source; }
+    setStorage(data);
+    return plan;
+  }
+
+  const plan = {
+    id: generateUUID(), name, raceType: input.raceType, startDate: input.startDate, raceDate: input.raceDate,
+    runDays: input.runDays, longRunDay: input.longRunDay,
+    createdAt: new Date().toISOString(), activatedAt: Date.now(),
+    weeks: schedule()
   };
+  data.plans.unshift(plan);
+  setStorage(data);
+  return plan;
+}
+
+const PLAN_DISTANCE_CHOICES = [['5k', '5K'], ['10k', '10K'], ['half_marathon', 'Half marathon'], ['marathon', 'Marathon']];
+const DEFAULT_RUN_DAYS = ['tuesday', 'thursday', 'saturday'];
+let planFormSeq = 0;
+
+// Plan form shared by onboarding, "New plan" and "Edit plan".
+function mountPlanForm(host, { plan = null, submitLabel = 'Create plan', onSaved, onCancel, onDelete } = {}) {
+  if (!host) return;
+  const uid     = `planform${++planFormSeq}`;
+  const choices = [...PLAN_DISTANCE_CHOICES];
+  if (plan && !choices.some(([value]) => value === plan.raceType)) choices.push([plan.raceType, raceTypeLabel(plan.raceType)]);
+
+  const state = {
+    raceType:    plan ? plan.raceType : 'half_marathon',
+    runDays:     plan ? WEEK_ORDER.filter(d => plan.runDays.includes(d)) : [...DEFAULT_RUN_DAYS],
+    longRunDay:  plan ? plan.longRunDay : 'saturday',
+    raceTouched: !!plan
+  };
+
+  host.innerHTML = `
+    <form class="plan-form" novalidate>
+      <div class="form-group">
+        <span class="form-label" id="${uid}-dist">Race distance</span>
+        <div class="pill-group" role="radiogroup" aria-labelledby="${uid}-dist">
+          ${choices.map(([value, label]) => `<button type="button" class="pill" role="radio" data-race="${value}">${label}</button>`).join('')}
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="${uid}-start">Plan starts</label>
+          <input type="date" class="form-input" id="${uid}-start" required />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="${uid}-race">Race day</label>
+          <input type="date" class="form-input" id="${uid}-race" required />
+        </div>
+      </div>
+      <div class="form-group">
+        <span class="form-label" id="${uid}-days">Days you can run</span>
+        <div class="pill-group day-pills" role="group" aria-labelledby="${uid}-days">
+          ${WEEK_ORDER.map(day => `<button type="button" class="pill" data-day="${day}" aria-label="${capitalize(day)}">${DAY_SHORT[day]}</button>`).join('')}
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="${uid}-long">Long run day</label>
+          <select class="form-input" id="${uid}-long"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="${uid}-name">Plan name (optional)</label>
+          <input type="text" class="form-input" id="${uid}-name" maxlength="80" autocomplete="off" />
+        </div>
+      </div>
+      <div class="stat-strip plan-summary" aria-live="polite"></div>
+      <div class="form-error" role="alert"></div>
+      ${plan ? `<p class="form-note">Changing the distance, dates or run days rebuilds the schedule${plan.source === 'ai' ? ' from RunTrack\'s template' : ''}. Runs you have already logged are kept.</p>` : ''}
+      <div class="modal-actions">
+        ${onCancel ? '<button type="button" class="btn btn-secondary" data-action="cancel">Cancel</button>' : ''}
+        ${onDelete ? '<button type="button" class="btn btn-danger" data-action="delete">Delete plan</button>' : ''}
+        <button type="submit" class="btn btn-primary">${escapeHtml(submitLabel)}</button>
+      </div>
+    </form>`;
+
+  const form      = host.querySelector('form');
+  const startEl   = form.querySelector(`#${uid}-start`);
+  const raceEl    = form.querySelector(`#${uid}-race`);
+  const longEl    = form.querySelector(`#${uid}-long`);
+  const nameEl    = form.querySelector(`#${uid}-name`);
+  const summaryEl = form.querySelector('.plan-summary');
+  const errorEl   = form.querySelector('.form-error');
+
+  startEl.value = plan ? plan.startDate : formatDate(getToday());
+  raceEl.value  = plan ? plan.raceDate : recommendedRaceDate(startEl.value, state.raceType, state.longRunDay);
+  nameEl.value  = plan ? plan.name : '';
+
+  const readInput = () => ({
+    name: nameEl.value.trim().slice(0, 80),
+    raceType: state.raceType,
+    startDate: startEl.value,
+    raceDate: raceEl.value,
+    runDays: [...state.runDays],
+    longRunDay: state.longRunDay
+  });
+
+  const suggestRaceDate = () => {
+    if (!state.raceTouched && isValidDateString(startEl.value)) {
+      raceEl.value = recommendedRaceDate(startEl.value, state.raceType, state.longRunDay);
+    }
+  };
+
+  const refresh = () => {
+    if (!state.runDays.includes(state.longRunDay)) {
+      state.longRunDay = ['saturday', 'sunday'].find(d => state.runDays.includes(d)) || state.runDays[state.runDays.length - 1] || '';
+    }
+    form.querySelectorAll('[data-race]').forEach(btn => {
+      const on = btn.dataset.race === state.raceType;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-checked', String(on));
+    });
+    form.querySelectorAll('[data-day]').forEach(btn => {
+      const on = state.runDays.includes(btn.dataset.day);
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', String(on));
+    });
+    longEl.innerHTML = state.runDays.length
+      ? state.runDays.map(d => `<option value="${d}">${capitalize(d)}</option>`).join('')
+      : '<option value="">Pick your run days first</option>';
+    longEl.value = state.longRunDay;
+    nameEl.placeholder = isValidDateString(raceEl.value) ? defaultPlanName(state.raceType, raceEl.value) : 'My training plan';
+
+    const input = readInput();
+    const error = validatePlanInput(input, plan);
+    errorEl.textContent = error;
+    summaryEl.hidden = !!error;
+    summaryEl.innerHTML = error ? '' : planStatsMarkup(plan && !planScheduleChanged(plan, input)
+      ? plan.weeks
+      : generatePlanWeeks(input.startDate, input.raceDate, input.raceType, input.runDays, input.longRunDay));
+    return error;
+  };
+
+  form.querySelectorAll('[data-race]').forEach(btn => btn.addEventListener('click', () => {
+    state.raceType = btn.dataset.race;
+    suggestRaceDate();
+    refresh();
+  }));
+  form.querySelectorAll('[data-day]').forEach(btn => btn.addEventListener('click', () => {
+    const day = btn.dataset.day;
+    state.runDays = state.runDays.includes(day)
+      ? state.runDays.filter(d => d !== day)
+      : WEEK_ORDER.filter(d => d === day || state.runDays.includes(d));
+    refresh();
+  }));
+  longEl.addEventListener('change', () => { state.longRunDay = longEl.value; suggestRaceDate(); refresh(); });
+  startEl.addEventListener('change', () => { suggestRaceDate(); refresh(); });
+  raceEl.addEventListener('change', () => { state.raceTouched = true; refresh(); });
+  form.querySelector('[data-action="cancel"]')?.addEventListener('click', () => onCancel());
+  form.querySelector('[data-action="delete"]')?.addEventListener('click', () => onDelete());
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (refresh()) { errorEl.scrollIntoView({ block: 'nearest' }); return; }
+    const saved = savePlanFromInput(readInput(), plan);
+    if (saved && onSaved) onSaved(saved);
+  });
+
+  refresh();
 }
 
 // ============================================================================
@@ -503,99 +709,41 @@ function createDefaultPlan() {
 
 async function initializeData() {
   await loadFromDB();
-  if (!appData.plans || appData.plans.length === 0) {
-    // Before creating a default plan, check if user has data in the old Dexie IndexedDB
-    const legacyData = await readLegacyIndexedDB();
-    if (legacyData && legacyData.plans && legacyData.plans.length > 0) {
-      appData = { plans: legacyData.plans, runs: legacyData.runs || [], whoopRecovery: null };
-      await persistToDB(appData);
-      deleteLegacyIndexedDB();
-      return;
-    }
-    // No legacy data — create the default plan
-    appData = { plans: [], runs: [], whoopRecovery: null };
-    const plan = createDefaultPlan();
-    appData.plans.push(plan);
-    appData.runs.push({
-      id: generateUUID(), planId: plan.id, date: '2026-03-30',
-      type: 'easy', distance: 2, time: 1097, effort: 7, notes: 'First run'
-    });
-    await persistToDB(appData);
-  }
-}
-
-// Read all records from the old Dexie-managed IndexedDB (RunTrackDB)
-function readLegacyIndexedDB() {
-  return new Promise((resolve) => {
-    try {
-      const req = indexedDB.open('RunTrackDB');
-      req.onerror = () => resolve(null);
-      req.onsuccess = (e) => {
-        const idb = e.target.result;
-        const storeNames = Array.from(idb.objectStoreNames);
-        if (!storeNames.includes('plans') || !storeNames.includes('runs')) {
-          idb.close(); return resolve(null);
-        }
-        try {
-          const tx    = idb.transaction(['plans', 'runs'], 'readonly');
-          const plans = [], runs = [];
-          tx.objectStore('plans').openCursor().onsuccess = (ev) => {
-            const cursor = ev.target.result;
-            if (cursor) { plans.push(cursor.value); cursor.continue(); }
-          };
-          tx.objectStore('runs').openCursor().onsuccess = (ev) => {
-            const cursor = ev.target.result;
-            if (cursor) { runs.push(cursor.value); cursor.continue(); }
-          };
-          tx.oncomplete = () => { idb.close(); resolve({ plans, runs }); };
-          tx.onerror    = () => { idb.close(); resolve(null); };
-        } catch (_) { idb.close(); resolve(null); }
-      };
-      req.onupgradeneeded = (e) => { e.target.result.close(); resolve(null); };
-    } catch (_) { resolve(null); }
-  });
-}
-
-function deleteLegacyIndexedDB() {
-  try { indexedDB.deleteDatabase('RunTrackDB'); } catch (_) {}
+  appData.plans = sortPlans(appData.plans || []);
 }
 
 // ============================================================================
 // PLAN ADJUSTMENTS
 // ============================================================================
 
-function getMissedRuns(planId, upToDate) {
-  const data = getStorage();
-  const plan = data.plans.find(p => p.id === planId);
-  if (!plan) return [];
-  const upToDateObj = parseDate(upToDate);
-  const runLog = {};
-  data.runs.forEach(run => { if (run.planId === planId) runLog[run.date] = run; });
-  const missedRuns = [];
-  for (const week of plan.weeks) {
-    for (const run of week.runs) {
-      if (parseDate(run.date) <= upToDateObj && !runLog[run.date] && run.type === 'easy')
-        missedRuns.push(run);
-    }
-  }
-  return missedRuns;
+const ADJUST_LOOKBACK_DAYS = 7;
+const ADJUST_MAX_EXTRA_MI  = 2;
+
+function loggedDates(data, planId) {
+  return new Set(data.runs.filter(r => r.planId === planId).map(r => r.date));
 }
 
-function getAdjustmentCandidates(planId, startDate) {
+// Easy runs in the week before `dateStr` that were never logged and have not
+// been offered for redistribution yet.
+function getMissedRuns(planId, dateStr) {
   const data = getStorage();
   const plan = data.plans.find(p => p.id === planId);
   if (!plan) return [];
-  const startDateObj = parseDate(startDate);
-  const runLog = {};
-  data.runs.forEach(run => { if (run.planId === planId) runLog[run.date] = run; });
-  const candidates = [];
-  for (const week of plan.weeks) {
-    for (const run of week.runs) {
-      if (parseDate(run.date) >= startDateObj && !runLog[run.date] && run.type === 'easy')
-        candidates.push(run);
-    }
-  }
-  return candidates.slice(0, 3);
+  const logged = loggedDates(data, planId);
+  const from   = formatDate(addDays(parseDate(dateStr), -ADJUST_LOOKBACK_DAYS));
+  return plan.weeks.flatMap(w => w.runs).filter(r =>
+    r.type === 'easy' && !r.missHandled && r.date >= from && r.date < dateStr && !logged.has(r.date));
+}
+
+// The next three unlogged easy runs after `dateStr`, from today onwards.
+function getAdjustmentCandidates(planId, dateStr) {
+  const data = getStorage();
+  const plan = data.plans.find(p => p.id === planId);
+  if (!plan) return [];
+  const logged   = loggedDates(data, planId);
+  const todayStr = formatDate(getToday());
+  return plan.weeks.flatMap(w => w.runs).filter(r =>
+    r.type === 'easy' && r.date > dateStr && r.date >= todayStr && !logged.has(r.date)).slice(0, 3);
 }
 
 // ============================================================================
@@ -621,21 +769,43 @@ function recoveryLabel(score) {
   return 'Low — consider rest';
 }
 
+function updatePlanChrome() {
+  document.body.classList.toggle('has-plan', getStorage().plans.length > 0);
+}
+
+function renderOnboarding() {
+  document.getElementById('dashboardContent').innerHTML = `
+    <div class="onboarding">
+      <div class="onboarding-intro">
+        <div class="onboarding-eyebrow">Welcome to RunTrack</div>
+        <h2 class="onboarding-title">Build your training plan</h2>
+        <p class="onboarding-text">Choose your race and the days you can run. RunTrack lays out a week-by-week schedule of easy runs, long runs and a taper. You can change it at any time.</p>
+      </div>
+      <div class="settings-section onboarding-card" id="onboardingForm"></div>
+      <p class="onboarding-alt">Prefer to describe your goal in your own words? Try the <a href="#" onclick="switchTab('ai'); return false;">AI planner</a> with your own Anthropic API key. Moving from another device? <a href="#" onclick="showImportModal(); return false;">Import a RunTrack export</a>.</p>
+    </div>`;
+  mountPlanForm(document.getElementById('onboardingForm'), {
+    submitLabel: 'Create my plan',
+    onSaved: () => {
+      renderAll();
+      updateHeaderInfo();
+      showToast('Your plan is ready. Log runs from the schedule or with the + button.', 'success');
+    }
+  });
+}
+
 function renderDashboard() {
   const data = getStorage();
+  updatePlanChrome();
   if (data.plans.length === 0) {
-    document.getElementById('dashboardContent').innerHTML = `
-      <div class="empty-state">
-        <div class="empty-text">No training plans yet</div>
-        <button class="btn btn-primary" onclick="showCreatePlanModal()">Create Your First Plan</button>
-      </div>`;
+    renderOnboarding();
     return;
   }
 
   const activePlan = data.plans[0];
   const today      = getToday();
-  const raceDate   = parseDate(activePlan.raceDate);
-  const daysToRace = Math.ceil((raceDate - today) / (1000 * 60 * 60 * 24));
+  const todayStr   = formatDate(today);
+  const daysToRace = daysBetween(todayStr, activePlan.raceDate);
 
   const runLog = {};
   data.runs.forEach(run => { if (run.planId === activePlan.id) runLog[run.date] = run; });
@@ -695,7 +865,6 @@ function renderDashboard() {
   });
 
   let thisWeekPlanned = 0, thisWeekActual = 0, thisWeekDone = 0, thisWeekTotal = 0;
-  let nextRun = null;
   if (currentWeek) {
     for (const run of currentWeek.runs) {
       thisWeekPlanned += run.plannedDistance;
@@ -703,19 +872,30 @@ function renderDashboard() {
       if (runLog[run.date]) {
         thisWeekActual += runLog[run.date].distance;
         thisWeekDone++;
-      } else if (!nextRun && parseDate(run.date) >= today) {
-        nextRun = run;
       }
     }
   }
 
-  const nextRunLabel = nextRun
-    ? `${dayOfWeek(parseDate(nextRun.date))}<br><span style="font-size:13px;color:var(--text2);">${runTypeLabel(nextRun.type)} · ${nextRun.plannedDistance} mi</span>`
-    : currentWeek ? `<span style="color:var(--success);">Week complete</span>` : '—';
+  const nextRun = activePlan.weeks.flatMap(w => w.runs).find(r => r.date >= todayStr && !runLog[r.date]);
+  let nextRunLabel = '—';
+  if (nextRun) {
+    const daysAway = daysBetween(todayStr, nextRun.date);
+    const when = daysAway === 0 ? 'Today'
+      : daysAway < 7 ? dayOfWeek(parseDate(nextRun.date))
+      : escapeHtml(formatDisplayDate(nextRun.date, { weekday: 'short', month: 'short', day: 'numeric' }));
+    nextRunLabel = `${when}<br><span style="font-size:13px;font-weight:600;letter-spacing:0;color:var(--text2);">${runTypeLabel(nextRun.type)} · ${nextRun.plannedDistance} mi</span>`;
+  } else if (daysToRace < 0 || currentWeek) {
+    nextRunLabel = `<span style="color:var(--success);">All done</span>`;
+  }
 
   const weekLabel = currentWeek
-    ? `Week ${currentWeek.weekNumber} &nbsp;·&nbsp; ${currentWeek.startDate}`
-    : 'Between weeks';
+    ? `Week ${currentWeek.weekNumber} &nbsp;·&nbsp; ${escapeHtml(formatDisplayDate(currentWeek.startDate, { month: 'short', day: 'numeric' }))}`
+    : todayStr < activePlan.startDate
+      ? `Plan starts ${escapeHtml(formatDisplayDate(activePlan.startDate, { weekday: 'short', month: 'short', day: 'numeric' }))}`
+      : 'Plan complete';
+
+  const bannerValue = daysToRace > 0 ? String(daysToRace) : daysToRace === 0 ? 'Today' : 'Done';
+  const bannerLabel = daysToRace > 1 ? 'days to race' : daysToRace === 1 ? 'day to race' : daysToRace === 0 ? 'is race day' : 'race complete';
 
   // Whoop recovery card
   let whoopSection = '';
@@ -753,15 +933,15 @@ function renderDashboard() {
   document.getElementById('dashboardContent').innerHTML = `
     <div class="view-header" style="margin-bottom:var(--spacing-xl);">
       <div>
-        <h2>${activePlan.name}</h2>
-        <div style="font-size:13px;color:var(--text2);margin-top:4px;">${raceTypeLabel(activePlan.raceType)} · Race date: ${activePlan.raceDate}</div>
+        <h2>${escapeHtml(activePlan.name)}</h2>
+        <div style="font-size:13px;color:var(--text2);margin-top:4px;">${raceTypeLabel(activePlan.raceType)} · Race day: ${escapeHtml(formatDisplayDate(activePlan.raceDate))}</div>
       </div>
     </div>
 
     <div class="race-banner">
       <div>
-        <div class="race-banner-days">${daysToRace}</div>
-        <div class="race-banner-label">days to race</div>
+        <div class="race-banner-days">${bannerValue}</div>
+        <div class="race-banner-label">${bannerLabel}</div>
       </div>
       <div class="race-banner-divider"></div>
       <div style="flex:1;padding-left:var(--spacing-xl);">
@@ -915,8 +1095,11 @@ function renderWeeklyMileageChart(data) {
 function renderSchedule() {
   const data = getStorage();
   if (data.plans.length === 0) {
-    document.getElementById('scheduleContent').innerHTML =
-      `<div class="empty-state"><div class="empty-text">No plans yet. <a href="#" onclick="showCreatePlanModal();return false;">Create one →</a></div></div>`;
+    document.getElementById('scheduleContent').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-text">You do not have a training plan yet.</div>
+        <button class="btn btn-primary" onclick="switchTab('dashboard')">Create a plan</button>
+      </div>`;
     return;
   }
 
@@ -956,7 +1139,7 @@ function renderSchedule() {
         <div class="week-header" onclick="toggleWeek(this)">
           <div>
             <div class="week-title">Week ${week.weekNumber}</div>
-            <div class="week-meta">${formatDate(weekStart)} – ${formatDate(weekEnd)}</div>
+            <div class="week-meta">${escapeHtml(formatDisplayDate(week.startDate, { month: 'short', day: 'numeric' }))} – ${escapeHtml(formatDisplayDate(formatDate(weekEnd), { month: 'short', day: 'numeric' }))}</div>
             <div class="week-badges">${badges.map(b => `<span class="badge ${b.cls}">${b.label}</span>`).join('')}</div>
           </div>
           <div style="text-align:right;">
@@ -977,7 +1160,7 @@ function renderSchedule() {
         <div class="run-row">
           <div class="run-dot ${run.type}"></div>
           <div class="run-info">
-            <div class="run-name">${dayOfWeek(runDate)}, ${run.date}</div>
+            <div class="run-name">${dayOfWeek(runDate)}, ${escapeHtml(formatDisplayDate(run.date, { month: 'short', day: 'numeric' }))}</div>
             <div class="run-details">
               <span class="run-type-tag run-type-${run.type}">${runTypeLabel(run.type)}</span>
               ${run.plannedDistance} mi planned${logEntry ? ` · <strong>${logEntry.distance} mi</strong> logged` : ''}
@@ -1018,8 +1201,8 @@ function renderHistory() {
   if (data.runs.length === 0) {
     document.getElementById('historyContent').innerHTML = `
       <div class="empty-state">
-        <div class="empty-text">No runs logged yet</div>
-        <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Your First Run</button>
+        <div class="empty-text">No runs logged yet.</div>
+        <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log a run</button>
       </div>`;
     return;
   }
@@ -1032,16 +1215,17 @@ function renderHistory() {
     </tr></thead><tbody>`;
 
   sorted.forEach(run => {
-    const source = run.effortSource === 'auto' ? 'Auto-calculated' : run.effortSource === 'whoop' ? 'From Whoop' : 'Manually set';
+    const source   = run.effortSource === 'auto' ? 'Auto-calculated from heart rate' : run.effortSource === 'whoop' ? 'From Whoop' : 'Set manually';
+    const computed = run.effortSource === 'auto' || run.effortSource === 'whoop';
     html += `
-      <tr style="cursor:pointer;" onclick="showLogRunModal('', '${run.date}')">
-        <td>${run.date}</td>
+      <tr style="cursor:pointer;" onclick="showLogRunModal('', '${run.date}', '${run.id}')">
+        <td>${escapeHtml(formatDisplayDate(run.date, { month: 'short', day: 'numeric', year: 'numeric' }))}</td>
         <td><span class="run-type-tag run-type-${run.type}">${runTypeLabel(run.type)}</span></td>
         <td><strong>${run.distance}</strong> mi</td>
         <td>${secondsToTimeString(run.time)}</td>
         <td>${calculatePace(run.distance, run.time) || '—'}${calculatePace(run.distance, run.time) ? '/mi' : ''}</td>
-        <td>${run.effort ? `<span class="effort-badge" title="${source}">${run.effort}/10${run.effortSource === 'auto' || run.effortSource === 'whoop' ? ' ◆' : ''}</span>` : '—'}</td>
-        <td class="notes-cell">${run.notes || '—'}</td>
+        <td>${run.effort ? `<span class="effort-badge${computed ? ' auto' : ''}" title="${source}">${run.effort}/10</span>` : '—'}</td>
+        <td class="notes-cell" title="${escapeHtml(run.notes || '')}">${escapeHtml(run.notes || '') || '—'}</td>
       </tr>`;
   });
 
@@ -1059,33 +1243,35 @@ function renderPlans() {
   if (data.plans.length === 0) {
     document.getElementById('plansContent').innerHTML = `
       <div class="empty-state">
-        <div class="empty-text">No training plans yet</div>
-        <button class="btn btn-primary" onclick="showCreatePlanModal()">Create Your First Plan</button>
+        <div class="empty-text">No training plans yet.</div>
+        <button class="btn btn-primary" onclick="switchTab('dashboard')">Create a plan</button>
       </div>`;
     return;
   }
 
   let html = '';
   data.plans.forEach((plan, idx) => {
-    const isActive  = idx === 0;
-    const totalRuns = plan.weeks.reduce((s, w) => s + w.runs.length, 0);
-    const loggedRuns = data.runs.filter(r => r.planId === plan.id).length;
+    const isActive     = idx === 0;
+    const plannedDates = new Set(plan.weeks.flatMap(w => w.runs.map(r => r.date)));
+    const totalRuns    = plannedDates.size;
+    const loggedRuns   = data.runs.filter(r => r.planId === plan.id && plannedDates.has(r.date)).length;
     const pct = totalRuns > 0 ? Math.round((loggedRuns / totalRuns) * 100) : 0;
 
     html += `
       <div class="plan-card ${isActive ? 'active' : ''}">
         ${isActive ? '<div class="plan-active-tag">Active</div>' : ''}
-        <div class="plan-name">${plan.name}</div>
-        <div class="plan-dates">${plan.startDate} → ${plan.raceDate}</div>
+        <div class="plan-name">${escapeHtml(plan.name)}</div>
+        <div class="plan-dates">${escapeHtml(formatDisplayDate(plan.startDate))} to ${escapeHtml(formatDisplayDate(plan.raceDate))}</div>
         <div class="plan-details">
-          <div class="plan-detail-item"><strong>Race:</strong> ${raceTypeLabel(plan.raceType)}</div>
-          <div class="plan-detail-item"><strong>Run Days:</strong> ${plan.runDays.map(d => d[0].toUpperCase() + d.slice(1)).join(', ')}</div>
+          <div class="plan-detail-item"><strong>Race:</strong> ${raceTypeLabel(plan.raceType)}${plan.source === 'ai' ? ' · drafted with the AI planner' : ''}</div>
+          <div class="plan-detail-item"><strong>Run days:</strong> ${plan.runDays.map(capitalize).join(', ')}</div>
           <div class="plan-detail-item"><strong>Weeks:</strong> ${plan.weeks.length} &nbsp;·&nbsp; <strong>Progress:</strong> ${loggedRuns}/${totalRuns} runs (${pct}%)</div>
         </div>
         <div class="progress-bar" style="margin:12px 0;">
           <div class="progress-fill" style="width:${pct}%"></div>
         </div>
         <div class="plan-actions">
+          ${isActive ? '' : `<button class="btn btn-primary sm" onclick="setActivePlan('${plan.id}')">Make active</button>`}
           <button class="btn btn-secondary sm" onclick="editPlan('${plan.id}')">Edit</button>
           <button class="btn btn-danger sm" onclick="deletePlanConfirm('${plan.id}')">Delete</button>
         </div>
@@ -1131,7 +1317,32 @@ function renderSettings() {
     ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : 'Never';
 
+  const activePlan = data.plans[0];
+
   document.getElementById('settingsContent').innerHTML = `
+    <div class="settings-group">
+      <div class="settings-group-label">Training plan</div>
+      ${activePlan ? `
+      <div class="settings-row">
+        <span class="settings-row-key">Active plan</span>
+        <span class="settings-row-val">${escapeHtml(activePlan.name)}</span>
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-key">Race day</span>
+        <span class="settings-row-val">${escapeHtml(formatDisplayDate(activePlan.raceDate))}</span>
+      </div>
+      <p class="settings-help">Edit the race, dates or run days to rebuild the schedule (logged runs are kept), or start a new plan. Earlier plans stay under All plans.</p>
+      <div class="settings-row-actions">
+        <button class="btn btn-secondary btn-sm" onclick="editPlan('${activePlan.id}')">Edit or rebuild</button>
+        <button class="btn btn-secondary btn-sm" onclick="showCreatePlanModal()">New plan</button>
+        <button class="btn btn-secondary btn-sm" onclick="switchTab('plans')">All plans (${data.plans.length})</button>
+      </div>` : `
+      <p class="settings-help">You do not have a training plan yet.</p>
+      <div class="settings-row-actions">
+        <button class="btn btn-primary btn-sm" onclick="switchTab('dashboard')">Create a plan</button>
+      </div>`}
+    </div>
+
     <div class="settings-group">
       <div class="settings-group-label">Profile</div>
       <div class="settings-row">
@@ -1250,11 +1461,10 @@ function updateHeaderInfo() {
   const data = getStorage();
   if (data.plans.length === 0) { document.getElementById('headerInfo').innerHTML = ''; return; }
   const activePlan = data.plans[0];
-  const daysLeft   = Math.ceil((parseDate(activePlan.raceDate) - getToday()) / (1000 * 60 * 60 * 24));
   document.getElementById('headerInfo').innerHTML = `
     <div>
-      <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.3px;">${activePlan.name}</div>
-      <div style="font-size:14px;font-weight:600;">${daysLeft} days to race</div>
+      <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.3px;">${escapeHtml(activePlan.name)}</div>
+      <div style="font-size:14px;font-weight:600;">${daysToRaceText(activePlan.raceDate)}</div>
     </div>`;
 }
 
@@ -1262,277 +1472,266 @@ function updateHeaderInfo() {
 // MODAL MANAGEMENT
 // ============================================================================
 
-let currentRunId  = null;
-let currentPlanId = null;
-let importMode    = 'merge';
+let currentLogId = null;
+let importMode   = 'merge';
 
 function openModal(id)  { document.getElementById(id).classList.add('active'); }
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
 
-function showLogRunModal(runId, dateStr) {
-  const data       = getStorage();
-  const activePlan = data.plans[0];
-  currentRunId     = runId || null;
-
-  let plannedInfo = '';
-  let foundRun    = null;
-
-  if (activePlan) {
-    for (const week of activePlan.weeks) {
-      const f = week.runs.find(r => r.id === runId || r.date === dateStr);
-      if (f) { foundRun = f; break; }
-    }
+function findPlannedRun(plan, dateStr) {
+  if (!plan || !dateStr) return null;
+  for (const week of plan.weeks) {
+    const run = week.runs.find(r => r.date === dateStr);
+    if (run) return run;
   }
+  return null;
+}
 
-  const existingLog = data.runs.find(r => r.date === (dateStr || (foundRun && foundRun.date)) && r.planId === activePlan?.id);
+function plannedRunLabel(run) {
+  return run
+    ? `${runTypeLabel(run.type)} · ${run.plannedDistance} mi · about ${secondsToTimeString(run.plannedTime)}`
+    : 'Nothing planned for this day';
+}
 
-  document.getElementById('logDate').value     = dateStr || '';
-  document.getElementById('logDistance').value = existingLog ? existingLog.distance : (foundRun ? foundRun.plannedDistance : '');
-  document.getElementById('logTime').value     = existingLog ? secondsToTimeString(existingLog.time) : '';
-  document.getElementById('logNotes').value    = existingLog ? existingLog.notes : '';
-
-  if (foundRun) {
-    plannedInfo = `${foundRun.plannedDistance} mi · ${secondsToTimeString(foundRun.plannedTime)}`;
-  }
-  document.getElementById('logPlanned').textContent = plannedInfo;
-
-  const deleteBtn = document.getElementById('deleteLogBtn');
-  if (deleteBtn) deleteBtn.style.display = existingLog ? 'block' : 'none';
-
-  const effortGrid = document.getElementById('effortGrid');
-  effortGrid.innerHTML = '';
+function buildEffortGrid(selected) {
+  const grid = document.getElementById('effortGrid');
+  grid.innerHTML = '';
   for (let i = 1; i <= 10; i++) {
     const btn = document.createElement('button');
-    btn.type      = 'button';
-    btn.className = `effort-btn ${existingLog && existingLog.effort === i ? 'active' : ''}`;
+    btn.type = 'button';
+    btn.className = `effort-btn${selected === i ? ' active' : ''}`;
     btn.textContent = i;
+    btn.dataset.value = i;
+    btn.setAttribute('aria-pressed', String(selected === i));
     btn.onclick = () => {
-      document.querySelectorAll('.effort-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      const wasActive = btn.classList.contains('active');
+      grid.querySelectorAll('.effort-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
+      if (!wasActive) { btn.classList.add('active'); btn.setAttribute('aria-pressed', 'true'); }
     };
-    effortGrid.appendChild(btn);
+    grid.appendChild(btn);
   }
+}
+
+// Opens the log form for a date. If a run is already logged that day (or
+// `logId` names one), the form edits it instead of adding a second run.
+function showLogRunModal(runId, dateStr, logId) {
+  const data = getStorage();
+  let existingLog = logId ? data.runs.find(r => r.id === logId) : null;
+  const plan = existingLog ? data.plans.find(p => p.id === existingLog.planId) : data.plans[0];
+  const date = dateStr || existingLog?.date || formatDate(getToday());
+  if (!existingLog && plan) existingLog = data.runs.find(r => r.planId === plan.id && r.date === date) || null;
+
+  if (!plan && !existingLog) {
+    showToast('Create a training plan first, then log your runs against it.');
+    switchTab('dashboard');
+    return;
+  }
+
+  const planned = findPlannedRun(plan, date);
+  currentLogId = existingLog ? existingLog.id : null;
+
+  document.getElementById('runLogTitle').textContent = existingLog ? 'Edit run' : 'Log a run';
+  document.getElementById('logDate').value     = date;
+  document.getElementById('logDistance').value = existingLog ? existingLog.distance : (planned ? planned.plannedDistance : '');
+  document.getElementById('logTime').value     = existingLog ? secondsToTimeString(existingLog.time) : '';
+  document.getElementById('logNotes').value    = existingLog ? existingLog.notes || '' : '';
+  document.getElementById('logPlanned').textContent = plannedRunLabel(planned);
+  document.getElementById('logError').textContent   = '';
+  document.getElementById('deleteLogBtn').style.display = existingLog ? '' : 'none';
+  buildEffortGrid(existingLog ? existingLog.effort : 0);
 
   openModal('runLogModal');
 }
 
 function showLogUnplannedModal() {
+  showLogRunModal('', formatDate(getToday()));
+}
+
+function updateLogPlanned() {
   const data = getStorage();
-  if (!data.plans.length) { alert('Create a training plan first.'); return; }
-
-  currentRunId = null;
-  document.getElementById('logDate').value     = formatDate(getToday());
-  document.getElementById('logDistance').value = '';
-  document.getElementById('logTime').value     = '';
-  document.getElementById('logNotes').value    = '';
-  document.getElementById('logPlanned').textContent = '';
-  const deleteBtn = document.getElementById('deleteLogBtn');
-  if (deleteBtn) deleteBtn.style.display = 'none';
-
-  const effortGrid = document.getElementById('effortGrid');
-  effortGrid.innerHTML = '';
-  for (let i = 1; i <= 10; i++) {
-    const btn = document.createElement('button');
-    btn.type = 'button'; btn.className = 'effort-btn'; btn.textContent = i;
-    btn.onclick = () => {
-      document.querySelectorAll('.effort-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-    };
-    effortGrid.appendChild(btn);
-  }
-  openModal('runLogModal');
+  const log  = currentLogId ? data.runs.find(r => r.id === currentLogId) : null;
+  const plan = log ? data.plans.find(p => p.id === log.planId) : data.plans[0];
+  document.getElementById('logPlanned').textContent = plannedRunLabel(findPlannedRun(plan, document.getElementById('logDate').value));
 }
 
 function saveRunLog(event) {
   event.preventDefault();
-  const data       = getStorage();
-  const activePlan = data.plans[0];
-  const dateStr    = document.getElementById('logDate').value;
-  const distance   = parseFloat(document.getElementById('logDistance').value);
-  const time       = timeStringToSeconds(document.getElementById('logTime').value);
-  const notes      = document.getElementById('logNotes').value;
-  const effortBtn  = document.querySelector('.effort-btn.active');
-  const effort     = effortBtn ? parseInt(effortBtn.textContent) : 0;
+  const errorEl  = document.getElementById('logError');
+  const data     = getStorage();
+  const existing = currentLogId ? data.runs.find(r => r.id === currentLogId) : null;
+  const planId   = existing ? existing.planId : data.plans[0]?.id;
+  const plan     = data.plans.find(p => p.id === planId);
+  const dateStr  = document.getElementById('logDate').value;
+  const distance = Number(document.getElementById('logDistance').value);
+  const timeText = document.getElementById('logTime').value.trim();
+  const time     = timeStringToSeconds(timeText);
+  const notes    = document.getElementById('logNotes').value.trim().slice(0, 500);
+  const effortEl = document.querySelector('#effortGrid .effort-btn.active');
+  const effort   = effortEl ? Number(effortEl.dataset.value) : 0;
+  const clash    = data.runs.find(r => r.planId === planId && r.date === dateStr && r.id !== existing?.id);
 
-  if (!distance || !time) { alert('Please fill in distance and time'); return; }
+  let error = '';
+  if (!planId) error = 'Create a training plan first.';
+  else if (!isValidDateString(dateStr)) error = 'Choose the date of your run.';
+  else if (clash) error = `You already logged a run on ${formatDisplayDate(dateStr, { month: 'short', day: 'numeric' })}. Open it from History to change it.`;
+  else if (!(distance > 0) || distance > 200) error = 'Enter a distance in miles, for example 3.1.';
+  else if (!timeText) error = 'Enter how long the run took, for example 32:15.';
+  else if (!(time > 0) || time > 48 * 3600) error = 'Enter the time as mm:ss or h:mm:ss, for example 32:15 or 1:05:30.';
+  errorEl.textContent = error;
+  if (error) return;
 
-  let runLog = data.runs.find(r => r.date === dateStr && r.planId === activePlan.id);
-  if (!runLog) {
-    runLog = { id: generateUUID(), planId: activePlan.id, date: dateStr };
-    data.runs.push(runLog);
-  }
-
-  let runType = 'easy';
-  if (currentRunId) {
-    for (const week of activePlan.weeks) {
-      const found = week.runs.find(r => r.id === currentRunId);
-      if (found) { runType = found.type; break; }
-    }
-  }
-
-  runLog.type         = runType;
-  runLog.distance     = distance;
-  runLog.time         = time;
-  runLog.effort       = effort;
-  runLog.effortSource = effort ? 'manual' : 'none';
-  runLog.notes        = notes;
-
-  const missedMileage = getMissedRuns(activePlan.id, dateStr).reduce((s, r) => s + r.plannedDistance, 0);
-  if (missedMileage > 0 && distance > 3) {
-    const candidates = getAdjustmentCandidates(activePlan.id, dateStr);
-    if (candidates.length > 0) {
-      showAdjustmentModal(missedMileage, candidates, data);
-      setStorage(data);
-      closeModal('runLogModal');
-      return;
-    }
-  }
+  const planned = findPlannedRun(plan, dateStr);
+  const run = existing || { id: generateUUID(), planId };
+  if (!existing) data.runs.push(run);
+  const keepSource = existing && effort && effort === existing.effort && existing.effortSource;
+  Object.assign(run, {
+    date: dateStr,
+    type: planned ? planned.type : (existing?.type || 'easy'),
+    distance: Math.round(distance * 100) / 100,
+    time,
+    effort,
+    effortSource: keepSource ? existing.effortSource : effort ? 'manual' : 'none',
+    notes
+  });
 
   setStorage(data);
   closeModal('runLogModal');
-  renderSchedule();
-  renderDashboard();
+  renderAll();
+  updateHeaderInfo();
+  if (existing) { showToast('Run updated.', 'success'); return; }
+  if (!offerAdjustment(plan, dateStr)) showToast('Run logged.', 'success');
 }
 
-function showAdjustmentModal(missedMileage, candidates, data) {
+let pendingAdjustment = null;
+
+// After a new run is logged, offer to spread recently missed easy miles over
+// the next few easy runs. Each missed run is only offered once.
+function offerAdjustment(plan, dateStr) {
+  if (!plan) return false;
+  const missed     = getMissedRuns(plan.id, dateStr);
+  const candidates = getAdjustmentCandidates(plan.id, dateStr);
+  const missedMi   = missed.reduce((sum, r) => sum + r.plannedDistance, 0);
+  if (!missed.length || !candidates.length) return false;
+
+  const extra = Math.min(ADJUST_MAX_EXTRA_MI, Math.round(missedMi / candidates.length * 2) / 2);
+  missed.forEach(r => { r.missHandled = true; });
+  setStorage(getStorage());
+  if (extra <= 0) return false;
+
+  pendingAdjustment = { planId: plan.id, extra, runIds: candidates.map(r => r.id) };
   document.getElementById('adjustmentMessage').textContent =
-    `You've logged a longer run. Redistribute ${missedMileage.toFixed(1)} missed miles across future easy runs?`;
+    `You missed ${missed.length} easy run${missed.length === 1 ? '' : 's'} (${Math.round(missedMi * 10) / 10} mi) in the week before this run. ` +
+    `Add ${extra} mi to each of your next ${candidates.length === 1 ? 'easy run' : `${candidates.length} easy runs`} to make up some of it?`;
   document.getElementById('adjustmentRuns').innerHTML = candidates.map(r => `
     <div class="adjustment-run">
-      <div class="adjustment-run-title">${dayOfWeek(parseDate(r.date))}, ${r.date}</div>
-      <div class="adjustment-run-detail">${r.plannedDistance} mi → ${(r.plannedDistance + missedMileage / candidates.length).toFixed(1)} mi</div>
+      <div class="adjustment-run-title">${dayOfWeek(parseDate(r.date))}, ${escapeHtml(formatDisplayDate(r.date, { month: 'short', day: 'numeric' }))}</div>
+      <div class="adjustment-run-detail">${r.plannedDistance} mi to ${Math.round((r.plannedDistance + extra) * 10) / 10} mi</div>
     </div>`).join('');
-  window._adjustmentData = { data, candidates, missedMileage };
   openModal('adjustmentModal');
+  return true;
 }
 
 function applyAdjustment() {
-  const { data, candidates, missedMileage } = window._adjustmentData;
-  candidates.forEach(candidate => {
-    for (const week of data.plans[0].weeks) {
-      const found = week.runs.find(r => r.id === candidate.id);
-      if (found) { found.plannedDistance += missedMileage / candidates.length; break; }
+  const data = getStorage();
+  const plan = pendingAdjustment && data.plans.find(p => p.id === pendingAdjustment.planId);
+  if (plan) {
+    for (const run of plan.weeks.flatMap(w => w.runs)) {
+      if (!pendingAdjustment.runIds.includes(run.id)) continue;
+      run.plannedDistance = Math.round((run.plannedDistance + pendingAdjustment.extra) * 10) / 10;
+      run.plannedTime = Math.round(run.plannedDistance * PACE_SEC_PER_MI[run.type]);
     }
-  });
-  setStorage(data);
+    setStorage(data);
+    renderAll();
+    showToast('Your next easy runs were updated.', 'success');
+  }
+  pendingAdjustment = null;
   closeModal('adjustmentModal');
-  renderSchedule();
-  renderDashboard();
 }
 
 function deleteCurrentLog() {
-  const data       = getStorage();
-  const activePlan = data.plans[0];
-  const dateStr    = document.getElementById('logDate').value;
-  const idx        = data.runs.findIndex(r => r.date === dateStr && r.planId === activePlan.id);
-  if (idx !== -1) { data.runs.splice(idx, 1); setStorage(data); }
+  if (!currentLogId || !confirm('Delete this run from your log?')) return;
+  const data = getStorage();
+  data.runs = data.runs.filter(r => r.id !== currentLogId);
+  currentLogId = null;
+  setStorage(data);
   closeModal('runLogModal');
-  renderSchedule();
-  renderDashboard();
+  renderAll();
+  updateHeaderInfo();
+  showToast('Run deleted.');
+}
+
+function openPlanModal(title, options) {
+  document.getElementById('createPlanTitle').textContent = title;
+  openModal('createPlanModal');
+  mountPlanForm(document.getElementById('planFormHost'), {
+    onCancel: () => closeModal('createPlanModal'),
+    ...options
+  });
 }
 
 function showCreatePlanModal() {
-  document.getElementById('createPlanTitle').textContent = 'New Plan';
-  document.getElementById('planName').value      = '';
-  document.getElementById('planRaceType').value  = '';
-  document.getElementById('planStartDate').value = '';
-  document.getElementById('planRaceDate').value  = '';
-  document.getElementById('planLongRunDay').value = '';
-  document.getElementById('deletePlanBtn').style.display = 'none';
-  currentPlanId = null;
-
-  const pillGroup = document.getElementById('runDaysPills');
-  pillGroup.innerHTML = '';
-  ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].forEach(day => {
-    const pill = document.createElement('div');
-    pill.className = 'pill'; pill.textContent = day;
-    pill.onclick = () => pill.classList.toggle('active');
-    pillGroup.appendChild(pill);
-  });
-  openModal('createPlanModal');
-}
-
-function savePlan(event) {
-  event.preventDefault();
-  const name       = document.getElementById('planName').value.trim();
-  const raceType   = document.getElementById('planRaceType').value;
-  const startDate  = document.getElementById('planStartDate').value;
-  const raceDate   = document.getElementById('planRaceDate').value;
-  const longRunDay = document.getElementById('planLongRunDay').value;
-  const runDays    = Array.from(document.querySelectorAll('#runDaysPills .pill.active')).map(p => p.textContent.toLowerCase());
-
-  if (!name || !raceType || !startDate || !raceDate || !longRunDay || runDays.length === 0) {
-    alert('Please fill in all fields and select at least one run day'); return;
-  }
-  if (!runDays.includes(longRunDay)) { alert('Long run day must be one of the selected run days'); return; }
-
-  const data = getStorage();
-  if (currentPlanId) {
-    const plan = data.plans.find(p => p.id === currentPlanId);
-    if (plan) {
-      const changed = plan.startDate !== startDate || plan.raceDate !== raceDate ||
-        JSON.stringify([...plan.runDays].sort()) !== JSON.stringify([...runDays].sort()) ||
-        plan.longRunDay !== longRunDay;
-      plan.name = name; plan.raceType = raceType; plan.startDate = startDate;
-      plan.raceDate = raceDate; plan.runDays = runDays; plan.longRunDay = longRunDay;
-      if (changed) plan.weeks = generatePlanWeeks(startDate, raceDate, raceType, runDays, longRunDay);
+  openPlanModal('New plan', {
+    submitLabel: 'Create plan',
+    onSaved: () => {
+      closeModal('createPlanModal');
+      renderAll();
+      updateHeaderInfo();
+      switchTab('dashboard');
+      showToast('Plan created and set as your active plan.', 'success');
     }
-  } else {
-    const plan = generatePlan({ id: generateUUID(), name, raceType, startDate, raceDate, runDays, longRunDay });
-    data.plans.unshift(plan);
-  }
-  setStorage(data);
-  closeModal('createPlanModal');
-  renderPlans(); renderSchedule(); renderDashboard();
+  });
 }
 
 function editPlan(planId) {
+  const plan = getStorage().plans.find(p => p.id === planId);
+  if (!plan) return;
+  openPlanModal('Edit plan', {
+    plan,
+    submitLabel: 'Save changes',
+    onSaved: () => {
+      closeModal('createPlanModal');
+      renderAll();
+      updateHeaderInfo();
+      showToast('Plan updated.', 'success');
+    },
+    onDelete: () => {
+      if (deletePlanConfirm(planId)) closeModal('createPlanModal');
+    }
+  });
+}
+
+function setActivePlan(planId) {
   const data = getStorage();
   const plan = data.plans.find(p => p.id === planId);
   if (!plan) return;
-
-  document.getElementById('createPlanTitle').textContent = 'Edit Plan';
-  document.getElementById('planName').value       = plan.name;
-  document.getElementById('planRaceType').value   = plan.raceType;
-  document.getElementById('planStartDate').value  = plan.startDate;
-  document.getElementById('planRaceDate').value   = plan.raceDate;
-  document.getElementById('planLongRunDay').value = plan.longRunDay;
-  currentPlanId = planId;
-  document.getElementById('deletePlanBtn').style.display = 'block';
-
-  const pillGroup = document.getElementById('runDaysPills');
-  pillGroup.innerHTML = '';
-  ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].forEach(day => {
-    const pill = document.createElement('div');
-    pill.className = `pill ${plan.runDays.includes(day.toLowerCase()) ? 'active' : ''}`;
-    pill.textContent = day;
-    pill.onclick = () => pill.classList.toggle('active');
-    pillGroup.appendChild(pill);
-  });
-  openModal('createPlanModal');
-}
-
-function deletePlan() {
-  if (!currentPlanId) return;
-  if (!confirm('Delete this plan and all its logged runs?')) return;
-  const data = getStorage();
-  data.plans = data.plans.filter(p => p.id !== currentPlanId);
-  data.runs  = data.runs.filter(r => r.planId !== currentPlanId);
-  setStorage(data); currentPlanId = null;
-  closeModal('createPlanModal'); renderPlans(); renderSchedule(); renderDashboard();
+  plan.activatedAt = Date.now();
+  setStorage(data);
+  renderAll();
+  updateHeaderInfo();
+  showToast(`"${plan.name}" is now your active plan.`, 'success');
 }
 
 function deletePlanConfirm(planId) {
-  if (!confirm('Delete this plan and all its logged runs?')) return;
   const data = getStorage();
+  const plan = data.plans.find(p => p.id === planId);
+  if (!plan) return false;
+  const logged = data.runs.filter(r => r.planId === planId).length;
+  const detail = logged ? ` and its ${logged} logged run${logged === 1 ? '' : 's'}` : '';
+  if (!confirm(`Delete "${plan.name}"${detail}? This cannot be undone.`)) return false;
   data.plans = data.plans.filter(p => p.id !== planId);
   data.runs  = data.runs.filter(r => r.planId !== planId);
-  setStorage(data); renderPlans(); renderSchedule(); renderDashboard();
+  setStorage(data);
+  renderAll();
+  updateHeaderInfo();
+  showToast('Plan deleted.');
+  return true;
 }
 
 function showImportModal() {
   importMode = 'merge';
+  document.querySelectorAll('#importModal .pill').forEach(p => p.classList.toggle('active', p.dataset.mode === 'merge'));
   document.getElementById('importFile').value = '';
+  document.getElementById('importError').textContent = '';
   openModal('importModal');
 }
 
@@ -1542,65 +1741,247 @@ function setImportMode(element) {
   importMode = element.dataset.mode;
 }
 
+const SAFE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+
+function cleanText(value, maxLength) {
+  return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
+}
+
+function cleanNumber(value, min, max) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= min && n <= max ? n : null;
+}
+
+// Validate an exported RunTrack file and return clean { plans, runs }.
+// Unknown fields are dropped and unsafe IDs are replaced.
+function sanitizeImportedData(raw) {
+  if (!raw || typeof raw !== 'object' || (!Array.isArray(raw.plans) && !Array.isArray(raw.runs))) {
+    throw new Error('This file is not a RunTrack export.');
+  }
+  const planIdMap = new Map();
+  const plans = [];
+
+  for (const p of Array.isArray(raw.plans) ? raw.plans : []) {
+    if (!p || !isValidDateString(p.startDate) || !isValidDateString(p.raceDate) || !Array.isArray(p.weeks)) continue;
+    const id = typeof p.id === 'string' && SAFE_ID_PATTERN.test(p.id) ? p.id : generateUUID();
+    if (planIdMap.has(p.id) || plans.some(existing => existing.id === id)) continue;
+    planIdMap.set(p.id, id);
+
+    const seenDates = new Set();
+    const weeks = p.weeks.slice(0, 60).map((w, i) => ({
+      weekNumber: i + 1,
+      startDate: isValidDateString(w?.startDate) ? w.startDate : formatDate(addDays(parseDate(p.startDate), i * 7)),
+      runs: (Array.isArray(w?.runs) ? w.runs : []).filter(r => {
+        if (!r || !isValidDateString(r.date) || seenDates.has(r.date) || cleanNumber(r.plannedDistance, 0.1, 100) === null) return false;
+        seenDates.add(r.date);
+        return true;
+      }).map(r => {
+        const type = ['easy', 'long', 'race'].includes(r.type) ? r.type : 'easy';
+        const distance = Number(r.plannedDistance);
+        return {
+          id: typeof r.id === 'string' && SAFE_ID_PATTERN.test(r.id) ? r.id : generateUUID(),
+          date: r.date, type, plannedDistance: distance,
+          plannedTime: cleanNumber(r.plannedTime, 0, 172800) ?? Math.round(distance * PACE_SEC_PER_MI[type]),
+          actualDistance: null, actualTime: null, effort: null,
+          notes: cleanText(r.notes, 200)
+        };
+      })
+    }));
+
+    const runDays = WEEK_ORDER.filter(d => Array.isArray(p.runDays) && p.runDays.includes(d));
+    const plan = {
+      id,
+      name: cleanText(p.name, 80) || 'Imported plan',
+      raceType: RACE_TYPES.includes(p.raceType) ? p.raceType : 'custom',
+      startDate: p.startDate,
+      raceDate: p.raceDate,
+      runDays,
+      longRunDay: runDays.includes(p.longRunDay) ? p.longRunDay : (runDays[runDays.length - 1] || 'saturday'),
+      createdAt: typeof p.createdAt === 'string' && !Number.isNaN(Date.parse(p.createdAt)) ? p.createdAt : new Date().toISOString(),
+      weeks
+    };
+    const activatedAt = cleanNumber(p.activatedAt, 0, 1e14);
+    if (activatedAt) plan.activatedAt = activatedAt;
+    if (p.source === 'ai') plan.source = 'ai';
+    const notes = cleanText(p.notes, 600);
+    if (notes) plan.notes = notes;
+    plans.push(plan);
+  }
+
+  const runs = [];
+  const runIds = new Set();
+  for (const r of Array.isArray(raw.runs) ? raw.runs : []) {
+    const distance = cleanNumber(r?.distance, 0.01, 200);
+    const time     = cleanNumber(r?.time, 1, 172800);
+    if (!r || !isValidDateString(r.date) || distance === null || time === null) continue;
+    let id = typeof r.id === 'string' && SAFE_ID_PATTERN.test(r.id) ? r.id : generateUUID();
+    if (runIds.has(id)) id = generateUUID();
+    runIds.add(id);
+
+    const run = {
+      id,
+      planId: planIdMap.get(r.planId) || (typeof r.planId === 'string' && SAFE_ID_PATTERN.test(r.planId) ? r.planId : ''),
+      date: r.date,
+      type: ['easy', 'long', 'race'].includes(r.type) ? r.type : 'easy',
+      distance,
+      time: Math.round(time),
+      effort: Number.isInteger(r.effort) && r.effort >= 1 && r.effort <= 10 ? r.effort : 0,
+      effortSource: ['manual', 'auto', 'whoop', 'none'].includes(r.effortSource) ? r.effortSource : 'manual',
+      notes: cleanText(r.notes, 500)
+    };
+    if (typeof r.fitbitId === 'string' || typeof r.fitbitId === 'number') run.fitbitId = String(r.fitbitId).slice(0, 64);
+    if (typeof r.whoopWorkoutId === 'string') run.whoopWorkoutId = r.whoopWorkoutId.slice(0, 64);
+    const hr = cleanNumber(r.avgHeartRate, 20, 260);
+    if (hr !== null) run.avgHeartRate = hr;
+    if (Array.isArray(r.heartRateZones)) {
+      run.heartRateZones = r.heartRateZones.slice(0, 10)
+        .filter(z => z && typeof z === 'object')
+        .map(z => ({ name: cleanText(z.name, 40), minutes: cleanNumber(z.minutes, 0, 2880) ?? 0 }));
+    }
+    if (r.whoopZones && typeof r.whoopZones === 'object' && !Array.isArray(r.whoopZones)) {
+      run.whoopZones = Object.fromEntries(Object.entries(r.whoopZones).slice(0, 10)
+        .map(([key, value]) => [cleanText(key, 40), cleanNumber(value, 0, 1e9) ?? 0])
+        .filter(([key]) => key));
+    }
+    runs.push(run);
+  }
+
+  if (!plans.length && !runs.length) throw new Error('No plans or runs were found in this file.');
+  return { plans, runs };
+}
+
+// Merge imported records into existing data. Existing records win on ID
+// clashes, and a run is skipped if its plan already has a run on that date.
+function mergeRunTrackData(target, incoming) {
+  const planIds = new Set(target.plans.map(p => p.id));
+  const runIds  = new Set(target.runs.map(r => r.id));
+  const runKeys = new Set(target.runs.map(r => `${r.planId}|${r.date}`));
+  let addedPlans = 0, addedRuns = 0;
+  for (const plan of incoming.plans) {
+    if (planIds.has(plan.id)) continue;
+    target.plans.push(plan);
+    planIds.add(plan.id);
+    addedPlans++;
+  }
+  for (const run of incoming.runs) {
+    const key = `${run.planId}|${run.date}`;
+    if (runIds.has(run.id) || runKeys.has(key)) continue;
+    target.runs.push(run);
+    runIds.add(run.id);
+    runKeys.add(key);
+    addedRuns++;
+  }
+  return { addedPlans, addedRuns };
+}
+
 function performImport() {
-  const file = document.getElementById('importFile').files[0];
-  if (!file) { alert('Please select a file'); return; }
+  const file  = document.getElementById('importFile').files[0];
+  const errEl = document.getElementById('importError');
+  errEl.textContent = '';
+  if (!file) { errEl.textContent = 'Choose a RunTrack JSON export first.'; return; }
+  if (file.size > IMPORT_MAX_BYTES) { errEl.textContent = 'That file is too large to be a RunTrack export.'; return; }
+
   const reader = new FileReader();
+  reader.onerror = () => { errEl.textContent = 'Could not read that file.'; };
   reader.onload = (e) => {
+    let imported;
     try {
-      const imported = JSON.parse(e.target.result);
-      if (importMode === 'replace') {
-        setStorage(imported);
-      } else {
-        const existing = getStorage();
-        existing.plans.push(...(imported.plans || []));
-        existing.runs.push(...(imported.runs || []));
-        setStorage(existing);
-      }
-      closeModal('importModal');
-      renderAll(); updateHeaderInfo();
-    } catch (err) { alert('Invalid JSON file'); }
+      imported = sanitizeImportedData(JSON.parse(e.target.result));
+    } catch (err) {
+      errEl.textContent = err instanceof SyntaxError ? 'This file is not valid JSON.' : err.message;
+      return;
+    }
+
+    const existing = getStorage();
+    if (importMode === 'replace') {
+      if ((existing.plans.length || existing.runs.length) &&
+          !confirm('Replace all of your current plans and runs with this file? This cannot be undone.')) return;
+      setStorage({ ...existing, plans: imported.plans, runs: imported.runs });
+      showToast(`Imported ${imported.plans.length} plan(s) and ${imported.runs.length} run(s).`, 'success');
+    } else {
+      const { addedPlans, addedRuns } = mergeRunTrackData(existing, imported);
+      setStorage(existing);
+      showToast(`Added ${addedPlans} plan(s) and ${addedRuns} run(s). Duplicates were skipped.`, 'success');
+    }
+    closeModal('importModal');
+    renderAll();
+    updateHeaderInfo();
   };
   reader.readAsText(file);
 }
 
 function exportData() {
   const data = getStorage();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url; a.download = `runtrack-export-${formatDate(new Date())}.json`; a.click();
-  URL.revokeObjectURL(url);
+  const payload = { app: 'RunTrack', version: 1, exportedAt: new Date().toISOString(), plans: data.plans, runs: data.runs };
+  downloadFile(JSON.stringify(payload, null, 2), 'application/json', `runtrack-export-${formatDate(getToday())}.json`);
+}
+
+function downloadFile(content, type, filename) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a   = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function fileSlug(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'runtrack';
+}
+
+function icsText(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+}
+
+// Folds lines longer than 75 characters, as iCalendar (RFC 5545) requires.
+function icsFold(line) {
+  return line.length <= 75 ? line : line.match(/.{1,74}/gu).join('\r\n ');
 }
 
 function exportICS() {
-  const data = getStorage();
-  if (data.plans.length === 0) return;
+  const data       = getStorage();
   const activePlan = data.plans[0];
-  const today      = getToday();
-  const runLog     = {};
-  data.runs.forEach(run => { if (run.planId === activePlan.id) runLog[run.date] = run; });
+  if (!activePlan) { showToast('Create a training plan first.'); return; }
 
-  let ics = `BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//RunTrack//EN\nCALSCALE:GREGORIAN\nMETHOD:PUBLISH\nX-WR-CALNAME:${activePlan.name}\n`;
-  for (const week of activePlan.weeks) {
-    for (const run of week.runs) {
-      if (!runLog[run.date] && parseDate(run.date) >= today) {
-        const icalDate = run.date.replace(/-/g, '');
-        ics += `BEGIN:VEVENT\nDTSTART:${icalDate}\nSUMMARY:${runTypeLabel(run.type)} - ${run.plannedDistance} mi\nDESCRIPTION:${runTypeLabel(run.type)} - ${run.plannedDistance} miles\nUID:${run.id}@runtrack\nEND:VEVENT\n`;
-      }
-    }
+  const todayStr = formatDate(getToday());
+  const logged   = loggedDates(data, activePlan.id);
+  const stamp    = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//RunTrack//Training plan//EN',
+    'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', `X-WR-CALNAME:${icsText(activePlan.name)}`
+  ];
+  let events = 0;
+  for (const run of activePlan.weeks.flatMap(w => w.runs)) {
+    if (run.date < todayStr || logged.has(run.date)) continue;
+    const summary = `${runTypeLabel(run.type)} run: ${run.plannedDistance} mi`;
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:${run.id}@runtrack`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART;VALUE=DATE:${run.date.replace(/-/g, '')}`,
+      `DTEND;VALUE=DATE:${formatDate(addDays(parseDate(run.date), 1)).replace(/-/g, '')}`,
+      `SUMMARY:${icsText(summary)}`,
+      `DESCRIPTION:${icsText(`${activePlan.name}. ${summary}, about ${secondsToTimeString(run.plannedTime)}.`)}`,
+      'END:VEVENT'
+    );
+    events++;
   }
-  ics += 'END:VCALENDAR';
-  const blob = new Blob([ics], { type: 'text/calendar' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a'); a.href = url; a.download = `${activePlan.name}-schedule.ics`; a.click();
-  URL.revokeObjectURL(url);
+  lines.push('END:VCALENDAR');
+  if (!events) { showToast('There are no upcoming runs to export.'); return; }
+  downloadFile(lines.map(icsFold).join('\r\n') + '\r\n', 'text/calendar', `${fileSlug(activePlan.name)}-schedule.ics`);
+  showToast(`Exported ${events} upcoming run${events === 1 ? '' : 's'} to a calendar file.`, 'success');
 }
 
 function clearAllData() {
-  if (!confirm('Delete all plans and runs? This cannot be undone.')) return;
-  setStorage({ plans: [], runs: [], whoopRecovery: null });
-  renderAll(); updateHeaderInfo();
+  if (!confirm('Delete all of your plans and runs? This cannot be undone.')) return;
+  setStorage({ ...getStorage(), plans: [], runs: [], whoopRecovery: null });
+  renderAll();
+  updateHeaderInfo();
+  switchTab('dashboard');
+  showToast('All plans and runs were deleted.');
 }
 
 function toggleWeek(element) { element.nextElementSibling.classList.toggle('hidden'); }
@@ -2350,7 +2731,6 @@ const AI_KEY_PATTERN   = /^sk-ant-\S{4,}$/;
 const AI_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{1,100}$/;
 const AI_MAX_TOKENS    = 16000;
 const AI_TIMEOUT_MS    = 240000;
-const AI_PACE_SEC      = { easy: 600, long: 660, race: 600 };
 const AI_UNREADABLE    = 'Claude replied, but not with a plan RunTrack could read. Try again, or rephrase your goal.';
 
 let aiPromptDraft = '';
@@ -2610,7 +2990,7 @@ function normalizeAIPlan(raw) {
       const rounded = Math.round(distance * 10) / 10;
       byDate.set(run.date, {
         id: generateUUID(), date: run.date, type,
-        plannedDistance: rounded, plannedTime: Math.round(rounded * AI_PACE_SEC[type]),
+        plannedDistance: rounded, plannedTime: Math.round(rounded * PACE_SEC_PER_MI[type]),
         actualDistance: null, actualTime: null, effort: null,
         notes: typeof run.notes === 'string' ? run.notes.trim().slice(0, 200) : ''
       });
@@ -2693,9 +3073,6 @@ async function generateAIPlan() {
 }
 
 function renderAIPlanPreview(plan) {
-  const allRuns    = plan.weeks.flatMap(w => w.runs);
-  const totalMiles = allRuns.reduce((sum, r) => sum + r.plannedDistance, 0);
-  const longest    = allRuns.filter(r => r.type !== 'race').reduce((max, r) => Math.max(max, r.plannedDistance), 0);
   const typeSuffix = { long: ' long', race: ' race', easy: '' };
 
   const weekRows = plan.weeks.map(week => {
@@ -2711,12 +3088,7 @@ function renderAIPlanPreview(plan) {
       <div class="ai-preview-label">Plan ready to review</div>
       <div class="ai-preview-name">${escapeHtml(plan.name)}</div>
       <div class="ai-preview-meta">${escapeHtml(raceTypeLabel(plan.raceType))} · ${escapeHtml(formatDisplayDate(plan.startDate))} to ${escapeHtml(formatDisplayDate(plan.raceDate))}</div>
-      <div class="ai-preview-stats">
-        <div><strong>${plan.weeks.length}</strong><span>weeks</span></div>
-        <div><strong>${allRuns.length}</strong><span>runs</span></div>
-        <div><strong>${Math.round(totalMiles)}</strong><span>total miles</span></div>
-        <div><strong>${longest}</strong><span>longest run (mi)</span></div>
-      </div>
+      <div class="stat-strip">${planStatsMarkup(plan.weeks)}</div>
       ${plan.notes ? `<p class="ai-preview-notes">${escapeHtml(plan.notes)}</p>` : ''}
       <details class="ai-preview-weeks">
         <summary>Week-by-week schedule</summary>

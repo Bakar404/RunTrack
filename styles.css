@@ -1287,6 +1287,95 @@ textarea.form-input {
 }
 .form-error:empty { min-height: 0; margin: 0; }
 
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-md);
+}
+
+.form-note {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.5;
+  margin-bottom: var(--spacing-md);
+}
+
+button.pill { font-family: inherit; line-height: 1.4; }
+.pill:focus-visible,
+.effort-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.day-pills {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.day-pills .pill { padding: 8px 0; text-align: center; }
+
+.stat-strip[hidden] { display: none; }
+.plan-summary { margin: var(--spacing-sm) 0 0; }
+.plan-summary div { background: var(--bg3); }
+
+.log-planned {
+  font-size: 13px;
+  color: var(--text2);
+  margin: calc(var(--spacing-sm) * -1) 0 var(--spacing-lg);
+}
+.log-planned span { color: var(--accent); font-weight: 600; }
+
+/* ============================================================
+   Onboarding
+   ============================================================ */
+.onboarding {
+  max-width: 680px;
+  margin: 0 auto;
+  animation: fadeIn 0.25s ease;
+}
+
+.onboarding-intro { margin-bottom: var(--spacing-xl); }
+
+.onboarding-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--accent);
+  margin-bottom: var(--spacing-sm);
+}
+
+.onboarding-title {
+  font-size: clamp(28px, 3.2vw, 38px);
+  font-weight: 800;
+  letter-spacing: -1px;
+  line-height: 1.15;
+  margin-bottom: var(--spacing-md);
+}
+
+.onboarding-text {
+  font-size: 15px;
+  color: var(--text2);
+  max-width: 560px;
+}
+
+.onboarding-card {
+  border-color: rgba(var(--accent-rgb), 0.3);
+  box-shadow: var(--shadow-md);
+}
+.onboarding-card .modal-actions { margin-top: var(--spacing-lg); }
+
+.onboarding-alt {
+  font-size: 13px;
+  color: var(--text2);
+  text-align: center;
+  margin-top: var(--spacing-md);
+}
+.onboarding-alt a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.onboarding-alt a:hover { text-decoration: underline; }
+
+body:not(.has-plan) .fab { display: none; }
+
 /* ============================================================
    AI Planner
    ============================================================ */
@@ -1371,13 +1460,13 @@ textarea.form-input {
 }
 .ai-preview-name { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
 .ai-preview-meta { font-size: 14px; color: var(--text2); margin-bottom: var(--spacing-md); }
-.ai-preview-stats {
+.stat-strip {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--spacing-sm);
   margin-bottom: var(--spacing-md);
 }
-.ai-preview-stats div {
+.stat-strip div {
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1385,8 +1474,8 @@ textarea.form-input {
   display: flex;
   flex-direction: column;
 }
-.ai-preview-stats strong { font-size: 22px; line-height: 1.2; }
-.ai-preview-stats span { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; }
+.stat-strip strong { font-size: 22px; line-height: 1.2; }
+.stat-strip span { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; }
 .ai-preview-notes { font-size: 14px; color: var(--text); margin-bottom: var(--spacing-md); }
 .ai-preview-weeks { margin-bottom: var(--spacing-md); }
 .ai-preview-weeks summary {
@@ -1663,6 +1752,17 @@ textarea.form-input {
   font-size: 12px;
   font-weight: 700;
   color: var(--text2);
+}
+
+.effort-badge.auto::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
 }
 
 .adjustment-runs {
@@ -1973,7 +2073,9 @@ details summary::-webkit-details-marker { display: none; }
 
   .modal-actions .btn { width: 100%; justify-content: center; }
 
-  .ai-preview-stats { grid-template-columns: repeat(2, 1fr); }
+  .stat-strip { grid-template-columns: repeat(2, 1fr); }
+  .form-row { grid-template-columns: 1fr; gap: 0; }
+  .onboarding-intro { margin-bottom: var(--spacing-lg); }
   .ai-key-row { flex-direction: column; }
   .ai-key-status { flex-direction: column; align-items: flex-start; }
   .toast-host { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
