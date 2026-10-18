@@ -612,7 +612,8 @@ html.light-mode .top-header {
 
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none !important; }
 
-.btn.sm {
+.btn.sm,
+.btn-sm {
   padding: 6px var(--spacing-md);
   font-size: 12px;
   border-radius: var(--radius-sm);
@@ -1254,6 +1255,182 @@ textarea.form-input {
   margin-top: var(--spacing-md);
 }
 
+.settings-help a,
+.privacy-note a,
+.device-step-body a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.settings-help a:hover,
+.privacy-note a:hover,
+.device-step-body a:hover { text-decoration: underline; }
+
+.view-intro {
+  font-size: 14px;
+  color: var(--text2);
+  margin-bottom: var(--spacing-xl);
+  max-width: 720px;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--text2);
+  align-self: center;
+}
+
+.form-error {
+  color: var(--danger);
+  font-size: 13px;
+  min-height: 18px;
+  margin-top: var(--spacing-sm);
+}
+.form-error:empty { min-height: 0; margin: 0; }
+
+/* ============================================================
+   AI Planner
+   ============================================================ */
+.privacy-note {
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.6;
+  margin-top: var(--spacing-md);
+  padding: 10px 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.privacy-note strong { color: var(--text); }
+
+.ai-key-card { border-color: rgba(var(--accent-rgb), 0.35); }
+
+.ai-key-row {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: stretch;
+}
+.ai-key-row .form-input { flex: 1; min-width: 0; font-family: "SF Mono", "Fira Code", monospace; font-size: 13px; }
+
+.ai-key-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-lg);
+}
+.ai-key-status-title {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+.ai-key-status-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.ai-key-status code,
+.settings-help code { font-family: "SF Mono", "Fira Code", monospace; }
+
+.ai-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--text2);
+  font-size: 14px;
+  padding: var(--spacing-lg) 0;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.ai-error {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.06);
+}
+.ai-error-title { font-size: 14px; font-weight: 700; color: var(--danger); margin-bottom: 4px; }
+.ai-error-body { font-size: 14px; color: var(--text); line-height: 1.6; word-break: break-word; }
+
+.ai-preview {
+  border-color: rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.05);
+}
+.ai-preview-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--success);
+  margin-bottom: var(--spacing-sm);
+}
+.ai-preview-name { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
+.ai-preview-meta { font-size: 14px; color: var(--text2); margin-bottom: var(--spacing-md); }
+.ai-preview-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+.ai-preview-stats div {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+}
+.ai-preview-stats strong { font-size: 22px; line-height: 1.2; }
+.ai-preview-stats span { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; }
+.ai-preview-notes { font-size: 14px; color: var(--text); margin-bottom: var(--spacing-md); }
+.ai-preview-weeks { margin-bottom: var(--spacing-md); }
+.ai-preview-weeks summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: var(--spacing-sm);
+}
+
+/* ============================================================
+   Toasts
+   ============================================================ */
+.toast-host {
+  position: fixed;
+  left: 50%;
+  bottom: var(--spacing-xl);
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+  pointer-events: none;
+  width: min(92vw, 460px);
+}
+
+.toast {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-size: 14px;
+  box-shadow: var(--shadow-lg);
+  animation: slideUp 0.2s ease;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  width: 100%;
+}
+.toast-success { border-left-color: var(--success); }
+.toast-error   { border-left-color: var(--danger); }
+.toast.leaving { opacity: 0; transform: translateY(8px); }
+
 /* ============================================================
    Device cards (Devices tab)
    ============================================================ */
@@ -1795,4 +1972,9 @@ details summary::-webkit-details-marker { display: none; }
   }
 
   .modal-actions .btn { width: 100%; justify-content: center; }
+
+  .ai-preview-stats { grid-template-columns: repeat(2, 1fr); }
+  .ai-key-row { flex-direction: column; }
+  .ai-key-status { flex-direction: column; align-items: flex-start; }
+  .toast-host { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }
 }

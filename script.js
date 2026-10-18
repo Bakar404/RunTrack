@@ -1,9 +1,11 @@
 // ============================================================================
-// ANTHROPIC PROXY URL
+// AI PLANNER CONFIGURATION
 // ============================================================================
-// After deploying worker.js to Cloudflare Workers, paste the URL here.
-// e.g. 'https://runtrack-ai.YOUR_USER.workers.dev'
-const ANTHROPIC_PROXY_URL = 'https://your-worker.your-subdomain.workers.dev';
+// The AI planner calls the Anthropic Messages API directly with the visitor's
+// own API key. The default model can be overridden per browser in Settings.
+const DEFAULT_AI_MODEL      = 'claude-sonnet-5-5';
+const ANTHROPIC_API_URL     = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_API_VERSION = '2023-06-01';
 
 // ============================================================================
 // FIREBASE CONFIGURATION
@@ -328,6 +330,49 @@ function runTypeLabel(type) {
 
 function getCSSVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+const RACE_TYPES   = ['5k', '10k', 'half_marathon', 'marathon', 'custom'];
+const WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const WEEK_ORDER   = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
+}
+
+// localStorage can throw (quota exceeded, storage disabled), so wrap access.
+function storageGet(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+
+function storageSet(key, value) {
+  try { localStorage.setItem(key, value); return true; } catch (_) { return false; }
+}
+
+function storageRemove(key) {
+  try { localStorage.removeItem(key); } catch (_) { /* storage unavailable */ }
+}
+
+function showToast(message, type = 'info', timeoutMs = 4500) {
+  let host = document.getElementById('toastHost');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toastHost';
+    host.className = 'toast-host';
+    host.setAttribute('role', 'status');
+    host.setAttribute('aria-live', 'polite');
+    document.body.appendChild(host);
+  }
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  host.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('leaving');
+    setTimeout(() => toast.remove(), 300);
+  }, timeoutMs);
 }
 
 // ============================================================================
@@ -1080,6 +1125,7 @@ function renderSettings() {
   const savedFitbitId = (currentUser && localStorage.getItem(lsKey('fitbit_client_id'))) || '';
   const savedWhoopId  = (currentUser && localStorage.getItem(lsKey('whoop_client_id')))  || '';
   const savedProxy    = (currentUser && localStorage.getItem(lsKey('whoop_proxy_url')))  || '';
+  const hasAIKey      = !!getAnthropicKey();
 
   const syncText = (ts) => ts
     ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -1095,6 +1141,24 @@ function renderSettings() {
       <div class="settings-row">
         <span class="settings-row-key">Theme</span>
         <button class="btn btn-secondary btn-sm" onclick="toggleTheme()">${getTheme() === 'light' ? 'Switch to dark' : 'Switch to light'}</button>
+      </div>
+    </div>
+
+    <div class="settings-group">
+      <div class="settings-group-label">AI planner</div>
+      <div class="settings-row">
+        <span class="settings-row-key">Anthropic API key</span>
+        <span class="settings-row-val">${hasAIKey ? 'Saved in this browser' : 'Not set'}</span>
+      </div>
+      <div class="settings-row">
+        <label class="settings-row-key" for="aiModelInput">Model <span class="settings-row-hint">optional</span></label>
+        <input type="text" class="settings-inline-input wide" id="aiModelInput" value="${escapeHtml(getSavedAIModel())}" placeholder="${DEFAULT_AI_MODEL}" autocomplete="off" spellcheck="false" onchange="saveAIModel(this.value)" />
+      </div>
+      <p class="settings-help">Leave the model blank to use the default, <code>${DEFAULT_AI_MODEL}</code>. Your key is stored only in this browser and is sent only to api.anthropic.com.</p>
+      <div class="settings-row-actions">
+        ${hasAIKey
+          ? `<button class="btn btn-secondary btn-sm" onclick="forgetAnthropicKey()">Forget key</button>`
+          : `<button class="btn btn-secondary btn-sm" onclick="switchTab('ai')">Add a key</button>`}
       </div>
     </div>
 
@@ -2276,152 +2340,416 @@ export default {
 }
 
 // ============================================================================
-// AI PLANNER
+// AI PLANNER (bring your own Anthropic API key)
 // ============================================================================
+// Requests go directly from this browser to the Anthropic Messages API. The key
+// is kept in localStorage for the current profile only: it is never synced to an
+// account, written to the URL, logged, or sent anywhere except api.anthropic.com.
+
+const AI_KEY_PATTERN   = /^sk-ant-\S{4,}$/;
+const AI_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{1,100}$/;
+const AI_MAX_TOKENS    = 16000;
+const AI_TIMEOUT_MS    = 240000;
+const AI_PACE_SEC      = { easy: 600, long: 660, race: 600 };
+const AI_UNREADABLE    = 'Claude replied, but not with a plan RunTrack could read. Try again, or rephrase your goal.';
+
+let aiPromptDraft = '';
+let pendingAIPlan = null;
+let aiBusy        = false;
+
+class AIPlanError extends Error {
+  constructor(message, status = 0) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function getAnthropicKey() {
+  return storageGet(lsKey('anthropic_api_key')) || '';
+}
+
+function getSavedAIModel() {
+  const saved = storageGet(lsKey('ai_model')) || '';
+  return AI_MODEL_PATTERN.test(saved) ? saved : '';
+}
+
+function getAIModel() {
+  return getSavedAIModel() || DEFAULT_AI_MODEL;
+}
+
+function saveAnthropicKeyFromInput() {
+  const input = document.getElementById('aiKeyInput');
+  const errEl = document.getElementById('aiKeyError');
+  const key   = (input?.value || '').trim();
+  if (errEl) errEl.textContent = '';
+
+  if (!AI_KEY_PATTERN.test(key)) {
+    if (errEl) errEl.textContent = 'That does not look like an Anthropic API key. Keys start with "sk-ant-".';
+    return;
+  }
+  if (!storageSet(lsKey('anthropic_api_key'), key)) {
+    if (errEl) errEl.textContent = 'Could not save the key because browser storage is unavailable.';
+    return;
+  }
+  input.value = '';
+  showToast('API key saved in this browser.', 'success');
+  renderAI();
+  renderSettings();
+}
+
+function forgetAnthropicKey() {
+  storageRemove(lsKey('anthropic_api_key'));
+  showToast('API key removed from this browser.');
+  renderAI();
+  renderSettings();
+}
+
+function saveAIModel(value) {
+  const model = (value || '').trim();
+  if (!model) {
+    storageRemove(lsKey('ai_model'));
+    showToast(`The AI planner will use the default model (${DEFAULT_AI_MODEL}).`);
+  } else if (!AI_MODEL_PATTERN.test(model)) {
+    showToast('That model ID is not valid. Use letters, numbers, dots and dashes.', 'error');
+  } else {
+    storageSet(lsKey('ai_model'), model);
+    showToast(`The AI planner will use ${model}.`, 'success');
+  }
+  renderSettings();
+  renderAI();
+}
+
+function aiPrivacyNote() {
+  return `<p class="privacy-note"><strong>Privacy:</strong> your key is stored only in this browser's local storage and is sent only to api.anthropic.com when you generate a plan. It is never saved to a RunTrack account or sent anywhere else. Usage is billed to your Anthropic account.</p>`;
+}
 
 function renderAI() {
-  document.getElementById('aiContent').innerHTML = `
-    <p style="color:var(--text2);font-size:14px;margin-bottom:var(--spacing-xl);">
-      Describe your goal and RunTrack will generate a personalised training plan using Claude AI — no setup required.
-    </p>
+  const host = document.getElementById('aiContent');
+  if (!host) return;
 
+  const hasKey      = !!getAnthropicKey();
+  const exampleDate = formatDisplayDate(formatDate(addDays(getToday(), 7 * 16)), { month: 'long', day: 'numeric' });
+
+  const keySection = hasKey ? `
+    <div class="settings-section ai-key-status">
+      <div class="ai-key-status-text">
+        <div class="ai-key-status-title"><span class="device-badge-connected">Key saved</span> Your Anthropic API key is stored in this browser.</div>
+        <div class="ai-key-status-sub">Model: <code>${escapeHtml(getAIModel())}</code> (change it in Settings)</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="forgetAnthropicKey()">Forget key</button>
+    </div>` : `
+    <div class="settings-section ai-key-card">
+      <div class="settings-section-title">Add your Anthropic API key</div>
+      <p class="settings-help">The AI planner runs on your own Anthropic account. Create a key at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">platform.claude.com</a>, then paste it here.</p>
+      <label class="form-label" for="aiKeyInput">API key</label>
+      <div class="ai-key-row">
+        <input type="password" class="form-input" id="aiKeyInput" placeholder="sk-ant-..." autocomplete="off" spellcheck="false" data-1p-ignore data-lpignore="true"
+          onkeydown="if (event.key === 'Enter') { event.preventDefault(); saveAnthropicKeyFromInput(); }" />
+        <button type="button" class="btn btn-primary" onclick="saveAnthropicKeyFromInput()">Save key</button>
+      </div>
+      <div class="form-error" id="aiKeyError" role="alert"></div>
+    </div>`;
+
+  host.innerHTML = `
+    <p class="view-intro">Describe your race and schedule, and Claude drafts a week-by-week plan you can review before saving it.</p>
+    ${keySection}
     <div class="settings-section">
-      <div class="settings-section-title">Describe Your Training Goal</div>
+      <div class="settings-section-title">Describe your goal</div>
       <div class="form-group">
-        <label class="form-label">Tell Claude what you need</label>
-        <textarea class="form-input" id="aiPrompt" rows="5" placeholder="e.g. I'm training for my first half marathon. My race is on September 20th and today is April 3rd. I can run 3 days a week — Monday, Wednesday, and Saturday. I can currently run about 3 miles comfortably. Build me a plan."></textarea>
+        <label class="form-label" for="aiPrompt">Race, race date, available days and current fitness</label>
+        <textarea class="form-input" id="aiPrompt" rows="5" maxlength="4000" oninput="aiPromptDraft = this.value"
+          placeholder="e.g. My first half marathon is on ${escapeHtml(exampleDate)}. I can run 3 days a week (Tuesday, Thursday and Saturday) and can currently run about 3 miles comfortably.">${escapeHtml(aiPromptDraft)}</textarea>
       </div>
       <div class="settings-actions">
-        <button class="btn btn-primary" id="aiGenerateBtn" onclick="generateAIPlan()">Generate Plan</button>
+        <button class="btn btn-primary" id="aiGenerateBtn" onclick="generateAIPlan()" ${hasKey && !aiBusy ? '' : 'disabled'}>${aiBusy ? 'Generating…' : 'Generate plan'}</button>
+        ${hasKey ? '' : '<span class="form-hint">Add your API key above to enable this.</span>'}
       </div>
+      ${aiPrivacyNote()}
     </div>
-
-    <div id="aiResult"></div>
+    <div id="aiResult" aria-live="polite">${aiBusy ? aiLoadingMarkup() : (pendingAIPlan ? renderAIPlanPreview(pendingAIPlan) : '')}</div>
   `;
 }
 
-async function generateAIPlan() {
-  const prompt = document.getElementById('aiPrompt')?.value?.trim();
-  if (!prompt) { alert('Please describe your training goal first.'); return; }
-  if (!ANTHROPIC_PROXY_URL) { alert('AI service is not configured yet. Please check back later.'); return; }
+function aiLoadingMarkup() {
+  return `<div class="ai-status"><span class="spinner" aria-hidden="true"></span>Claude is drafting your plan. This usually takes under a minute.</div>`;
+}
 
-  const btn     = document.getElementById('aiGenerateBtn');
-  const resultEl = document.getElementById('aiResult');
-  btn.disabled  = true; btn.textContent = 'Generating…';
-  resultEl.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:var(--spacing-lg) 0;">Claude is building your plan…</div>`;
+function showAIMessage(message, offerNewKey = false) {
+  const el = document.getElementById('aiResult');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="settings-section ai-error" role="alert">
+      <div class="ai-error-title">Could not generate a plan</div>
+      <div class="ai-error-body">${escapeHtml(message)}</div>
+      ${offerNewKey ? `<div class="settings-actions"><button class="btn btn-secondary btn-sm" onclick="forgetAnthropicKey()">Forget this key and enter a new one</button></div>` : ''}
+    </div>`;
+}
 
-  const today = formatDate(getToday());
+function buildAISystemPrompt() {
+  const today = getToday();
+  return `You are an experienced running coach working inside RunTrack, a training plan app. Turn the runner's request into a complete training plan.
 
-  const systemPrompt = `You are a running coach AI inside RunTrack, a training app. The user will describe their goal and you must respond with ONLY a valid JSON object (no markdown, no explanation) matching this exact schema:
+Today is ${dayOfWeek(today)}, ${formatDate(today)}. All distances are in miles.
 
+Reply with a single JSON object and nothing else: no markdown, no code fences, no commentary. Use exactly this shape:
 {
-  "name": "Plan name",
+  "name": "Short plan name",
   "raceType": "5k" | "10k" | "half_marathon" | "marathon" | "custom",
   "startDate": "YYYY-MM-DD",
   "raceDate": "YYYY-MM-DD",
-  "runDays": ["monday","wednesday","saturday"],
-  "longRunDay": "saturday",
+  "notes": "One or two sentences of coaching guidance",
   "weeks": [
-    {
-      "weekNumber": 1,
-      "startDate": "YYYY-MM-DD",
-      "runs": [
-        {
-          "id": "unique-id-1",
-          "date": "YYYY-MM-DD",
-          "type": "easy" | "long" | "race",
-          "plannedDistance": 3.0,
-          "plannedTime": 1800,
-          "actualDistance": null,
-          "actualTime": null,
-          "effort": null,
-          "notes": ""
-        }
-      ]
-    }
+    { "week": 1, "runs": [ { "date": "YYYY-MM-DD", "type": "easy" | "long" | "race", "distance": 3, "notes": "Optional short cue" } ] }
   ]
 }
 
 Rules:
-- Today is ${today}. Use realistic dates.
-- plannedTime is in seconds (distance × pace in sec/mile: easy=600, long=660, race=540).
-- Each run id must be a unique UUID v4 string.
-- The last week's last run should be type "race" on the raceDate.
-- Build a proper progressive training plan with taper weeks at the end.
-- Respond with ONLY the JSON object. No other text.`;
-
-  try {
-    const res = await fetch(ANTHROPIC_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-opus-4-6',
-        max_tokens: 8000,
-        messages: [{ role: 'user', content: prompt }],
-        system: systemPrompt
-      })
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || `API error ${res.status}`);
-    }
-
-    const data    = await res.json();
-    const rawText = data.content?.[0]?.text || '';
-
-    let plan;
-    try {
-      // Strip any accidental markdown fences
-      const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-      plan = JSON.parse(cleaned);
-    } catch (e) {
-      throw new Error('Claude returned unexpected output. Try rephrasing your prompt.');
-    }
-
-    // Assign fresh IDs and fill missing run IDs
-    plan.id        = generateUUID();
-    plan.createdAt = new Date().toISOString();
-    plan.weeks.forEach(week => {
-      week.runs.forEach(run => {
-        if (!run.id || run.id.length < 10) run.id = generateUUID();
-      });
-    });
-
-    // Show preview before saving
-    const totalRuns  = plan.weeks.reduce((s, w) => s + w.runs.length, 0);
-    const totalWeeks = plan.weeks.length;
-
-    resultEl.innerHTML = `
-      <div class="settings-section" style="border-color:var(--success);background:rgba(16,185,129,0.05);">
-        <div class="settings-section-title" style="color:var(--success);">Plan Generated</div>
-        <div style="font-size:22px;font-weight:700;margin-bottom:var(--spacing-sm);">${plan.name}</div>
-        <div style="color:var(--text2);font-size:14px;margin-bottom:var(--spacing-md);">
-          ${raceTypeLabel(plan.raceType)} · ${plan.startDate} → ${plan.raceDate}<br>
-          ${totalWeeks} weeks · ${totalRuns} runs · Long run day: ${plan.longRunDay}
-        </div>
-        <div style="color:var(--text2);font-size:13px;margin-bottom:var(--spacing-lg);">
-          Saving this will add the plan to your training plans. Your existing plan will remain active until you switch.
-        </div>
-        <div class="settings-actions">
-          <button class="btn btn-primary" onclick="saveAIPlan(${JSON.stringify(plan).replace(/"/g,'&quot;')})">Save Plan</button>
-          <button class="btn btn-secondary" onclick="renderAI()">Start Over</button>
-        </div>
-      </div>`;
-
-  } catch (e) {
-    resultEl.innerHTML = `<div class="settings-section" style="border-color:var(--danger);"><div style="color:var(--danger);font-size:14px;">${e.message}</div></div>`;
-  }
-
-  btn.disabled = false; btn.textContent = 'Generate Plan';
+- Start on or after today unless the runner asks otherwise. Week N covers the 7 days starting at startDate + 7 * (N - 1).
+- Only schedule runs on days the runner says they can run, with at most one run per date.
+- Use "long" for the weekly long run and "easy" for every other training run.
+- Build mileage gradually (about 10 percent per week), add a lighter week every 3 to 4 weeks, and taper for 1 to 3 weeks before race day.
+- The final run is type "race" on raceDate with the race distance (5k = 3.1, 10k = 6.2, half_marathon = 13.1, marathon = 26.2).
+- Keep the plan between 2 and 30 weeks and keep notes short.
+- If the request cannot be turned into a running plan, reply with {"error": "short explanation"} instead.`;
 }
 
-function saveAIPlan(plan) {
+async function callAnthropic(apiKey, prompt) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  const timeoutError  = () => new AIPlanError('The request timed out. Try again, or ask for a shorter plan.');
+  const networkError  = () => new AIPlanError('Could not reach api.anthropic.com. Check your internet connection, and make sure no browser extension or network filter is blocking it.');
+
+  try {
+    let res;
+    try {
+      res = await fetch(ANTHROPIC_API_URL, {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_API_VERSION,
+          'anthropic-dangerous-direct-browser-access': 'true',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: getAIModel(),
+          max_tokens: AI_MAX_TOKENS,
+          system: buildAISystemPrompt(),
+          messages: [{ role: 'user', content: prompt }]
+        }),
+        signal: controller.signal
+      });
+    } catch (err) {
+      throw err?.name === 'AbortError' ? timeoutError() : networkError();
+    }
+
+    let body = null;
+    try {
+      body = await res.json();
+    } catch (err) {
+      if (err?.name === 'AbortError') throw timeoutError();
+    }
+    if (!res.ok) throw describeAnthropicError(res.status, body);
+    if (!body) throw new AIPlanError(AI_UNREADABLE);
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function describeAnthropicError(status, body) {
+  const apiMessage = typeof body?.error?.message === 'string' ? body.error.message.slice(0, 300) : '';
+  const detail     = apiMessage ? ` Anthropic says: "${apiMessage}"` : '';
+  const messages = {
+    400: `Anthropic rejected the request (400).${detail}`,
+    401: 'Anthropic did not accept this API key (401). Check that you copied the whole key, or create a new one at platform.claude.com.',
+    403: `This API key is not allowed to use the Messages API (403).${detail}`,
+    404: `The model "${getAIModel()}" was not found (404). Check the model ID in Settings, or clear it to use the default.`,
+    413: 'The request was too large (413). Shorten your description and try again.',
+    429: `Anthropic is rate limiting this API key (429).${detail} Wait a minute and try again, and check your usage limits in the Anthropic Console.`,
+    500: 'Anthropic had an internal error (500). Try again in a moment.',
+    529: 'The Anthropic API is temporarily overloaded (529). Try again in a few minutes.'
+  };
+  return new AIPlanError(messages[status] || `The Anthropic API returned an error (${status}).${detail}`, status);
+}
+
+function extractJSONObject(text) {
+  if (!text) return null;
+  const cleaned = text.replace(/```(?:json)?/gi, '');
+  const start = cleaned.indexOf('{');
+  const end   = cleaned.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  try { return JSON.parse(cleaned.slice(start, end + 1)); } catch (_) { return null; }
+}
+
+function parseAIPlanResponse(body) {
+  if (body.stop_reason === 'refusal') throw new AIPlanError('Claude declined to create this plan. Try rephrasing your goal.');
+  if (body.stop_reason === 'max_tokens') throw new AIPlanError('The plan was too long to finish in one response. Ask for a shorter plan, or try again.');
+  const text = (Array.isArray(body.content) ? body.content : [])
+    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('');
+  const parsed = extractJSONObject(text);
+  if (!parsed) throw new AIPlanError(AI_UNREADABLE);
+  return parsed;
+}
+
+// Validate the model's JSON and convert it into RunTrack's plan format.
+function normalizeAIPlan(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new AIPlanError(AI_UNREADABLE);
+  if (typeof raw.error === 'string' && raw.error.trim()) {
+    throw new AIPlanError(`Claude could not build a plan from that description: ${raw.error.trim().slice(0, 300)}`);
+  }
+
+  const byDate = new Map();
+  for (const week of Array.isArray(raw.weeks) ? raw.weeks : []) {
+    for (const run of Array.isArray(week?.runs) ? week.runs : []) {
+      if (!run || !isValidDateString(run.date) || byDate.has(run.date)) continue;
+      const distance = Number(run.distance ?? run.plannedDistance);
+      if (!Number.isFinite(distance) || distance <= 0 || distance > 50) continue;
+      const type    = ['easy', 'long', 'race'].includes(run.type) ? run.type : 'easy';
+      const rounded = Math.round(distance * 10) / 10;
+      byDate.set(run.date, {
+        id: generateUUID(), date: run.date, type,
+        plannedDistance: rounded, plannedTime: Math.round(rounded * AI_PACE_SEC[type]),
+        actualDistance: null, actualTime: null, effort: null,
+        notes: typeof run.notes === 'string' ? run.notes.trim().slice(0, 200) : ''
+      });
+    }
+  }
+
+  const runs = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  if (!runs.length) throw new AIPlanError(AI_UNREADABLE);
+
+  const firstDate = runs[0].date;
+  const lastDate  = runs[runs.length - 1].date;
+  const startDate = isValidDateString(raw.startDate) && raw.startDate <= firstDate ? raw.startDate : firstDate;
+  const lastRace  = [...runs].reverse().find(r => r.type === 'race');
+  const raceDate  = lastRace ? lastRace.date
+    : (isValidDateString(raw.raceDate) && raw.raceDate >= lastDate ? raw.raceDate : lastDate);
+
+  const totalWeeks = Math.floor(daysBetween(startDate, raceDate) / 7) + 1;
+  if (totalWeeks > 52) throw new AIPlanError('Claude returned a plan longer than a year. Try again with a closer race date.');
+
+  const weeks = Array.from({ length: totalWeeks }, (_, i) => ({
+    weekNumber: i + 1,
+    startDate: formatDate(addDays(parseDate(startDate), i * 7)),
+    runs: []
+  }));
+  for (const run of runs) {
+    const index = Math.floor(daysBetween(startDate, run.date) / 7);
+    if (index >= 0 && index < weeks.length) weeks[index].runs.push(run);
+  }
+
+  const dayCounts = {}, longCounts = {};
+  runs.forEach(r => {
+    const day = WEEKDAY_KEYS[parseDate(r.date).getDay()];
+    dayCounts[day] = (dayCounts[day] || 0) + 1;
+    if (r.type === 'long') longCounts[day] = (longCounts[day] || 0) + 1;
+  });
+  const runDays    = WEEK_ORDER.filter(day => dayCounts[day]);
+  const longRunDay = Object.keys(longCounts).sort((a, b) => longCounts[b] - longCounts[a])[0] || runDays[runDays.length - 1];
+  const raceType   = RACE_TYPES.includes(raw.raceType) ? raw.raceType : 'custom';
+
+  return {
+    id: generateUUID(),
+    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 80) : `${raceTypeLabel(raceType)} plan`,
+    raceType, startDate, raceDate, runDays, longRunDay,
+    notes: typeof raw.notes === 'string' ? raw.notes.trim().slice(0, 600) : '',
+    source: 'ai',
+    weeks
+  };
+}
+
+async function generateAIPlan() {
+  if (aiBusy) return;
+  const apiKey = getAnthropicKey();
+  if (!apiKey) { renderAI(); return; }
+
+  const promptEl = document.getElementById('aiPrompt');
+  const prompt   = (promptEl?.value || '').trim();
+  aiPromptDraft  = promptEl?.value || '';
+  if (!prompt) {
+    showAIMessage('Describe your race, race date and the days you can run first.');
+    promptEl?.focus();
+    return;
+  }
+
+  aiBusy = true;
+  pendingAIPlan = null;
+  renderAI();
+
+  let errorToShow = null;
+  try {
+    const body = await callAnthropic(apiKey, prompt);
+    pendingAIPlan = normalizeAIPlan(parseAIPlanResponse(body));
+  } catch (err) {
+    errorToShow = err instanceof AIPlanError ? err : new AIPlanError('Something went wrong while generating the plan. Try again.');
+  } finally {
+    aiBusy = false;
+  }
+
+  renderAI();
+  if (errorToShow) showAIMessage(errorToShow.message, errorToShow.status === 401);
+}
+
+function renderAIPlanPreview(plan) {
+  const allRuns    = plan.weeks.flatMap(w => w.runs);
+  const totalMiles = allRuns.reduce((sum, r) => sum + r.plannedDistance, 0);
+  const longest    = allRuns.filter(r => r.type !== 'race').reduce((max, r) => Math.max(max, r.plannedDistance), 0);
+  const typeSuffix = { long: ' long', race: ' race', easy: '' };
+
+  const weekRows = plan.weeks.map(week => {
+    const miles = week.runs.reduce((sum, r) => sum + r.plannedDistance, 0);
+    const runsText = week.runs.length
+      ? week.runs.map(r => `${dayOfWeek(parseDate(r.date)).slice(0, 3)} ${r.plannedDistance}${typeSuffix[r.type]}`).join(', ')
+      : 'Rest week';
+    return `<tr><td>${week.weekNumber}</td><td>${escapeHtml(formatDisplayDate(week.startDate, { month: 'short', day: 'numeric' }))}</td><td>${escapeHtml(runsText)}</td><td>${miles.toFixed(1)}</td></tr>`;
+  }).join('');
+
+  return `
+    <div class="settings-section ai-preview">
+      <div class="ai-preview-label">Plan ready to review</div>
+      <div class="ai-preview-name">${escapeHtml(plan.name)}</div>
+      <div class="ai-preview-meta">${escapeHtml(raceTypeLabel(plan.raceType))} · ${escapeHtml(formatDisplayDate(plan.startDate))} to ${escapeHtml(formatDisplayDate(plan.raceDate))}</div>
+      <div class="ai-preview-stats">
+        <div><strong>${plan.weeks.length}</strong><span>weeks</span></div>
+        <div><strong>${allRuns.length}</strong><span>runs</span></div>
+        <div><strong>${Math.round(totalMiles)}</strong><span>total miles</span></div>
+        <div><strong>${longest}</strong><span>longest run (mi)</span></div>
+      </div>
+      ${plan.notes ? `<p class="ai-preview-notes">${escapeHtml(plan.notes)}</p>` : ''}
+      <details class="ai-preview-weeks">
+        <summary>Week-by-week schedule</summary>
+        <div class="table-scroll">
+          <table class="history-table">
+            <thead><tr><th>Week</th><th>Starts</th><th>Runs (miles)</th><th>Total</th></tr></thead>
+            <tbody>${weekRows}</tbody>
+          </table>
+        </div>
+      </details>
+      <p class="settings-help">Saving makes this your active plan. Your other plans stay available under Plans.</p>
+      <div class="settings-actions">
+        <button class="btn btn-primary" onclick="saveAIPlan()">Save and make active</button>
+        <button class="btn btn-secondary" onclick="discardAIPlan()">Discard</button>
+      </div>
+    </div>`;
+}
+
+function saveAIPlan() {
+  if (!pendingAIPlan) return;
   const data = getStorage();
-  data.plans.unshift(plan);
+  data.plans.unshift({ ...pendingAIPlan, createdAt: new Date().toISOString(), activatedAt: Date.now() });
+  pendingAIPlan = null;
   setStorage(data);
-  renderPlans();
-  switchTab('plans');
+  renderAll();
+  updateHeaderInfo();
+  switchTab('dashboard');
+  showToast('Plan saved and set as your active plan.', 'success');
+}
+
+function discardAIPlan() {
+  pendingAIPlan = null;
+  renderAI();
 }
 
 // ============================================================================
