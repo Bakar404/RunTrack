@@ -252,17 +252,40 @@ function generateUUID() {
   });
 }
 
-function getEstToday() {
+// All plan dates are calendar dates (YYYY-MM-DD) in the visitor's local time zone.
+function getToday() {
   const now = new Date();
-  const est = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  return new Date(est.getFullYear(), est.getMonth(), est.getDate());
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
-function formatDate(date) { return date.toISOString().split('T')[0]; }
+function formatDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day   = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
 
 function parseDate(dateStr) {
   const [year, month, day] = dateStr.split('-');
   return new Date(year, parseInt(month) - 1, day);
+}
+
+function isValidDateString(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && formatDate(parseDate(value)) === value;
+}
+
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+// Whole days from one YYYY-MM-DD date to another (rounding absorbs DST shifts).
+function daysBetween(fromStr, toStr) {
+  return Math.round((parseDate(toStr) - parseDate(fromStr)) / 86400000);
+}
+
+function formatDisplayDate(dateStr, options = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) {
+  return isValidDateString(dateStr) ? parseDate(dateStr).toLocaleDateString(undefined, options) : '';
 }
 
 function timeStringToSeconds(timeStr) {
@@ -565,7 +588,7 @@ function renderDashboard() {
   }
 
   const activePlan = data.plans[0];
-  const today      = getEstToday();
+  const today      = getToday();
   const raceDate   = parseDate(activePlan.raceDate);
   const daysToRace = Math.ceil((raceDate - today) / (1000 * 60 * 60 * 24));
 
@@ -853,7 +876,7 @@ function renderSchedule() {
   }
 
   const activePlan = data.plans[0];
-  const today      = getEstToday();
+  const today      = getToday();
   const runLog     = {};
   data.runs.forEach(run => { if (run.planId === activePlan.id) runLog[run.date] = run; });
 
@@ -1163,7 +1186,7 @@ function updateHeaderInfo() {
   const data = getStorage();
   if (data.plans.length === 0) { document.getElementById('headerInfo').innerHTML = ''; return; }
   const activePlan = data.plans[0];
-  const daysLeft   = Math.ceil((parseDate(activePlan.raceDate) - getEstToday()) / (1000 * 60 * 60 * 24));
+  const daysLeft   = Math.ceil((parseDate(activePlan.raceDate) - getToday()) / (1000 * 60 * 60 * 24));
   document.getElementById('headerInfo').innerHTML = `
     <div>
       <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:0.3px;">${activePlan.name}</div>
@@ -1234,7 +1257,7 @@ function showLogUnplannedModal() {
   if (!data.plans.length) { alert('Create a training plan first.'); return; }
 
   currentRunId = null;
-  document.getElementById('logDate').value     = formatDate(getEstToday());
+  document.getElementById('logDate').value     = formatDate(getToday());
   document.getElementById('logDistance').value = '';
   document.getElementById('logTime').value     = '';
   document.getElementById('logNotes').value    = '';
@@ -1490,7 +1513,7 @@ function exportICS() {
   const data = getStorage();
   if (data.plans.length === 0) return;
   const activePlan = data.plans[0];
-  const today      = getEstToday();
+  const today      = getToday();
   const runLog     = {};
   data.runs.forEach(run => { if (run.planId === activePlan.id) runLog[run.date] = run; });
 
@@ -2287,7 +2310,7 @@ async function generateAIPlan() {
   btn.disabled  = true; btn.textContent = 'Generating…';
   resultEl.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:var(--spacing-lg) 0;">Claude is building your plan…</div>`;
 
-  const today = formatDate(getEstToday());
+  const today = formatDate(getToday());
 
   const systemPrompt = `You are a running coach AI inside RunTrack, a training app. The user will describe their goal and you must respond with ONLY a valid JSON object (no markdown, no explanation) matching this exact schema:
 
