@@ -1,0 +1,21 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Local agent and tool settings
+.claude/
+
+# Dependencies and build output
+node_modules/
+dist/
+
+# Environment and secrets
+.env
+.env.*
+
+# Firebase CLI local state
+.firebase/
+*-debug.log
