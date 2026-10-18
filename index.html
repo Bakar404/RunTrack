@@ -169,8 +169,8 @@
             <div class="view-header">
               <h2>Training Schedule</h2>
               <div class="view-actions">
-                <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Unplanned</button>
-                <button class="btn btn-secondary" onclick="exportICS()">Export ICS</button>
+                <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log a run</button>
+                <button class="btn btn-secondary" onclick="exportICS()" title="Download upcoming runs as an .ics file for Google Calendar, Apple Calendar or Outlook">Add to calendar</button>
               </div>
             </div>
             <div id="scheduleContent"></div>
@@ -180,7 +180,7 @@
           <div class="view" id="history">
             <div class="view-header">
               <h2>Run History</h2>
-              <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log Run</button>
+              <button class="btn btn-secondary" onclick="showLogUnplannedModal()">Log a run</button>
             </div>
             <div id="historyContent"></div>
           </div>
@@ -189,7 +189,7 @@
           <div class="view" id="plans">
             <div class="view-header">
               <h2>Training Plans</h2>
-              <button class="btn btn-primary" onclick="showCreatePlanModal()">+ New Plan</button>
+              <button class="btn btn-primary" onclick="showCreatePlanModal()">New plan</button>
             </div>
             <div id="plansContent"></div>
           </div>
@@ -226,35 +226,36 @@
     <div class="modal" id="runLogModal">
       <div class="modal-content">
         <button class="modal-close" onclick="closeModal('runLogModal')">✕</button>
-        <h2 class="modal-title">Log Run</h2>
-        <form onsubmit="saveRunLog(event)">
+        <h2 class="modal-title" id="runLogTitle">Log a run</h2>
+        <form onsubmit="saveRunLog(event)" novalidate>
           <div class="form-group">
-            <label class="form-label">Date</label>
-            <input type="date" class="form-input" id="logDate" required />
+            <label class="form-label" for="logDate">Date</label>
+            <input type="date" class="form-input" id="logDate" required onchange="updateLogPlanned()" />
+          </div>
+          <p class="log-planned">Planned: <span id="logPlanned"></span></p>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label" for="logDistance">Distance (miles)</label>
+              <input type="number" class="form-input" id="logDistance" step="0.01" min="0" max="200" inputmode="decimal" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="logTime">Time</label>
+              <input type="text" class="form-input" id="logTime" placeholder="mm:ss or h:mm:ss" autocomplete="off" required />
+            </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Planned: <span id="logPlanned" style="color:var(--accent);font-weight:700;"></span></label>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Distance (miles)</label>
-            <input type="number" class="form-input" id="logDistance" step="0.1" min="0" required />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Time</label>
-            <input type="text" class="form-input" id="logTime" placeholder="mm:ss or h:mm:ss" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Perceived Effort (1–10)</label>
+            <span class="form-label">Perceived effort (1 easy, 10 all-out)</span>
             <div class="effort-grid" id="effortGrid"></div>
           </div>
           <div class="form-group">
-            <label class="form-label">Notes (optional)</label>
-            <textarea class="form-input" id="logNotes" rows="3"></textarea>
+            <label class="form-label" for="logNotes">Notes (optional)</label>
+            <textarea class="form-input" id="logNotes" rows="3" maxlength="500"></textarea>
           </div>
+          <div class="form-error" id="logError" role="alert"></div>
           <div class="modal-actions">
             <button type="button" class="btn btn-secondary" onclick="closeModal('runLogModal')">Cancel</button>
             <button type="button" class="btn btn-danger" id="deleteLogBtn" style="display:none" onclick="deleteCurrentLog()">Delete</button>
-            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="submit" class="btn btn-primary">Save run</button>
           </div>
         </form>
       </div>
@@ -278,54 +279,8 @@
     <div class="modal" id="createPlanModal">
       <div class="modal-content">
         <button class="modal-close" onclick="closeModal('createPlanModal')">✕</button>
-        <h2 class="modal-title" id="createPlanTitle">New Plan</h2>
-        <form onsubmit="savePlan(event)">
-          <div class="form-group">
-            <label class="form-label">Plan Name</label>
-            <input type="text" class="form-input" id="planName" required />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Race Type</label>
-            <select class="form-input" id="planRaceType" required>
-              <option value="">Select…</option>
-              <option value="5k">5K</option>
-              <option value="10k">10K</option>
-              <option value="half_marathon">Half Marathon</option>
-              <option value="marathon">Marathon</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Start Date</label>
-            <input type="date" class="form-input" id="planStartDate" required />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Race Date</label>
-            <input type="date" class="form-input" id="planRaceDate" required />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Run Days</label>
-            <div class="pill-group" id="runDaysPills"></div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Long Run Day</label>
-            <select class="form-input" id="planLongRunDay" required>
-              <option value="">Select…</option>
-              <option value="monday">Monday</option>
-              <option value="tuesday">Tuesday</option>
-              <option value="wednesday">Wednesday</option>
-              <option value="thursday">Thursday</option>
-              <option value="friday">Friday</option>
-              <option value="saturday">Saturday</option>
-              <option value="sunday">Sunday</option>
-            </select>
-          </div>
-          <div class="modal-actions">
-            <button type="button" class="btn btn-secondary" onclick="closeModal('createPlanModal')">Cancel</button>
-            <button type="button" class="btn btn-danger" id="deletePlanBtn" style="display:none" onclick="deletePlan()">Delete</button>
-            <button type="submit" class="btn btn-primary">Save</button>
-          </div>
-        </form>
+        <h2 class="modal-title" id="createPlanTitle">New plan</h2>
+        <div id="planFormHost"></div>
       </div>
     </div>
 
@@ -333,18 +288,20 @@
     <div class="modal" id="importModal">
       <div class="modal-content">
         <button class="modal-close" onclick="closeModal('importModal')">✕</button>
-        <h2 class="modal-title">Import Data</h2>
+        <h2 class="modal-title">Import data</h2>
+        <p class="form-note">Load a JSON file exported from RunTrack on this or another device.</p>
         <div class="form-group">
-          <label class="form-label">Import Mode</label>
+          <span class="form-label">Import mode</span>
           <div class="pill-group">
-            <div class="pill active" data-mode="merge" onclick="setImportMode(this)">Merge</div>
-            <div class="pill" data-mode="replace" onclick="setImportMode(this)">Replace All</div>
+            <button type="button" class="pill active" data-mode="merge" onclick="setImportMode(this)">Merge with my data</button>
+            <button type="button" class="pill" data-mode="replace" onclick="setImportMode(this)">Replace my data</button>
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label">JSON File</label>
-          <input type="file" class="form-input" id="importFile" accept=".json" />
+          <label class="form-label" for="importFile">RunTrack export (.json)</label>
+          <input type="file" class="form-input" id="importFile" accept=".json,application/json" />
         </div>
+        <div class="form-error" id="importError" role="alert"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" onclick="closeModal('importModal')">Cancel</button>
           <button type="button" class="btn btn-primary" onclick="performImport()">Import</button>
