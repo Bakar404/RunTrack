@@ -8,36 +8,300 @@ const ANTHROPIC_API_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_API_VERSION = '2023-06-01';
 
 // ============================================================================
-// FIREBASE CONFIGURATION
+// SESSION AND STORAGE
 // ============================================================================
-// Replace these placeholder values with your Firebase project config.
-// Get them from: Firebase Console → Project Settings → General → Your apps → Config
-const FIREBASE_CONFIG = {
-  apiKey:            "AIzaSyDDJCkZCqO9IWX17zJV85i_X3sx_WOjLNY",
-  authDomain:        "runtrack404.firebaseapp.com",
-  projectId:         "runtrack404",
-  storageBucket:     "runtrack404.firebasestorage.app",
-  messagingSenderId: "97566338423",
-  appId:             "1:97566338423:web:15c3d19017028f1a0cc572"
+// RunTrack runs in one of two modes:
+//   guest   - plans and runs are kept in this browser's localStorage only.
+//   account - optional sign-in; plans and runs sync through Cloud Firestore.
+// Each mode has its own localStorage namespace (rt_guest_* or rt_<uid>_*), so
+// guest data and account data never mix.
+
+const SESSION_KEY      = 'runtrack_session';
+const IMPORT_OFFER_KEY = 'runtrack_offer_import';
+const GUEST_DATA_KEY   = 'rt_guest_data';
+const DATA_VERSION     = 1;
+
+let session = null;   // { mode: 'guest' } or { mode: 'account', uid, username }
+let appData = { plans: [], runs: [], whoopRecovery: null };
+let storageWarningShown = false;
+
+function isAccountSession() {
+  return !!session && session.mode === 'account';
+}
+
+function lsKey(key) {
+  return `rt_${isAccountSession() ? session.uid : 'guest'}_${key}`;
+}
+
+function clearLocalNamespace(owner) {
+  const prefix = `rt_${owner}_`;
+  try {
+    Object.keys(localStorage).filter(k => k.startsWith(prefix)).forEach(k => localStorage.removeItem(k));
+  } catch (_) { /* storage unavailable */ }
+}
+
+function readGuestData() {
+  const raw = storageGet(GUEST_DATA_KEY);
+  if (!raw) return { plans: [], runs: [] };
+  try {
+    const parsed = JSON.parse(raw);
+    const isRecord = item => !!item && typeof item === 'object' && typeof item.id === 'string';
+    return {
+      plans: Array.isArray(parsed?.plans) ? parsed.plans.filter(isRecord) : [],
+      runs:  Array.isArray(parsed?.runs)  ? parsed.runs.filter(isRecord)  : []
+    };
+  } catch (_) {
+    // Set unreadable data aside instead of overwriting it.
+    storageSet(`${GUEST_DATA_KEY}_unreadable`, raw);
+    storageRemove(GUEST_DATA_KEY);
+    return { plans: [], runs: [] };
+  }
+}
+
+function hasGuestData() {
+  const guest = readGuestData();
+  return guest.plans.length > 0 || guest.runs.length > 0;
+}
+
+function writeGuestData(data) {
+  const saved = storageSet(GUEST_DATA_KEY, JSON.stringify({ version: DATA_VERSION, plans: data.plans, runs: data.runs }));
+  if (!saved && !storageWarningShown) {
+    storageWarningShown = true;
+    showToast('This browser could not save your changes because its storage is full or turned off. Export your data from Settings to keep a copy.', 'error', 9000);
+  }
+}
+
+function getStorage() { return appData; }
+
+function setStorage(data) {
+  data.plans = sortPlans(data.plans || []);
+  data.runs  = data.runs || [];
+  appData = data;
+  if (isAccountSession()) CloudStore.save(data);
+  else if (session) writeGuestData(data);
+}
+
+// JSON with sorted object keys, so equal records always serialize the same way.
+function stableStringify(value) {
+  return JSON.stringify(value, (key, val) => {
+    if (!val || typeof val !== 'object' || Array.isArray(val)) return val;
+    return Object.keys(val).sort().reduce((out, k) => { out[k] = val[k]; return out; }, {});
+  });
+}
+
+function snapshotOf(records) {
+  return new Map((records || []).map(record => [record.id, stableStringify(record)]));
+}
+
+function sameRecords(a, b) {
+  const left = snapshotOf(a), right = snapshotOf(b);
+  if (left.size !== right.size) return false;
+  for (const [id, json] of left) if (right.get(id) !== json) return false;
+  return true;
+}
+
+function replaceAppData(fresh) {
+  appData = { plans: sortPlans(fresh.plans), runs: fresh.runs, whoopRecovery: appData.whoopRecovery };
+  renderAll();
+  updateHeaderInfo();
+}
+
+// ============================================================================
+// OPTIONAL ACCOUNTS AND CLOUD SYNC (FIREBASE)
+// ============================================================================
+// The Firebase SDK loads only when someone signs in, so guest mode sends
+// nothing to Google. The Firebase project settings live in config.js.
+
+const FIREBASE_SDK_URL  = 'https://www.gstatic.com/firebasejs/10.12.2';
+const USERNAME_PATTERN  = /^[A-Za-z0-9_]{3,24}$/;
+const CLOUD_BATCH_LIMIT = 450;        // Firestore allows up to 500 writes per batch
+const CLOUD_REFRESH_MS  = 60 * 1000;  // minimum gap between background refreshes
+const UNSYNCED          = '';         // snapshot marker for a write that must be retried
+
+let auth = null;
+let db   = null;
+let firebaseLoading = null;
+let signingOut      = false;
+let lastCloudLoad   = 0;
+
+function firebaseConfig() {
+  const config = window.RUNTRACK_CONFIG && window.RUNTRACK_CONFIG.firebase;
+  return config && config.apiKey && config.projectId ? config : null;
+}
+
+function accountsEnabled() {
+  return !!firebaseConfig();
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.onload = resolve;
+    script.onerror = () => { script.remove(); reject(new Error(`Could not load ${src}`)); };
+    document.head.appendChild(script);
+  });
+}
+
+function ensureFirebase() {
+  if (!accountsEnabled()) return Promise.reject(new Error('Accounts are not enabled on this site.'));
+  if (!firebaseLoading) {
+    firebaseLoading = (async () => {
+      if (!window.firebase) await loadScript(`${FIREBASE_SDK_URL}/firebase-app-compat.js`);
+      const pending = [];
+      if (!firebase.auth)      pending.push(loadScript(`${FIREBASE_SDK_URL}/firebase-auth-compat.js`));
+      if (!firebase.firestore) pending.push(loadScript(`${FIREBASE_SDK_URL}/firebase-firestore-compat.js`));
+      await Promise.all(pending);
+      if (!firebase.apps.length) firebase.initializeApp(firebaseConfig());
+      auth = firebase.auth();
+      db   = firebase.firestore();
+      // Keep an offline copy so changes made without a connection sync later.
+      await db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+    })().catch(error => {
+      firebaseLoading = null;
+      throw error;
+    });
+  }
+  return firebaseLoading;
+}
+
+// Plans and runs are stored as users/{uid}/plans/{id} and users/{uid}/runs/{id}.
+// Saves compare against the last synced snapshot and only write what changed,
+// including deletes.
+const CloudStore = {
+  uid: null,
+  synced: { plans: new Map(), runs: new Map() },
+  inflight: new Set(),
+  saveCount: 0,
+  lastErrorAt: 0,
+
+  ref(name, id) {
+    return db.collection('users').doc(this.uid).collection(name).doc(id);
+  },
+
+  async fetch(uid) {
+    const user = db.collection('users').doc(uid);
+    const [plans, runs] = await Promise.all([user.collection('plans').get(), user.collection('runs').get()]);
+    const toRecords = snap => snap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+    return { plans: toRecords(plans), runs: toRecords(runs) };
+  },
+
+  adopt(uid, data) {
+    this.uid = uid;
+    this.synced = { plans: snapshotOf(data.plans), runs: snapshotOf(data.runs) };
+  },
+
+  hasUnsynced() {
+    return [...this.synced.plans.values(), ...this.synced.runs.values()].includes(UNSYNCED);
+  },
+
+  busy() {
+    return this.inflight.size > 0 || this.hasUnsynced();
+  },
+
+  save(data) {
+    if (!this.uid || !db) return Promise.resolve(false);
+    this.saveCount++;
+    const ops = [];
+    for (const name of ['plans', 'runs']) {
+      const next = snapshotOf(data[name]);
+      const prev = this.synced[name];
+      next.forEach((json, id) => { if (prev.get(id) !== json) ops.push({ name, id, json }); });
+      prev.forEach((_, id) => { if (!next.has(id)) ops.push({ name, id, json: null }); });
+      this.synced[name] = next;
+    }
+
+    const commits = [];
+    for (let i = 0; i < ops.length; i += CLOUD_BATCH_LIMIT) {
+      const chunk = ops.slice(i, i + CLOUD_BATCH_LIMIT);
+      const batch = db.batch();
+      chunk.forEach(op => {
+        if (op.json === null) batch.delete(this.ref(op.name, op.id));
+        else batch.set(this.ref(op.name, op.id), JSON.parse(op.json));
+      });
+      const commit = batch.commit().then(() => true, error => {
+        chunk.forEach(op => this.synced[op.name].set(op.id, UNSYNCED));
+        this.reportError(error);
+        return false;
+      });
+      this.inflight.add(commit);
+      commit.then(() => this.inflight.delete(commit));
+      commits.push(commit);
+    }
+    return Promise.all(commits).then(results => results.every(Boolean));
+  },
+
+  // Retry failed writes and wait (up to timeoutMs) for the server to confirm.
+  flush(data, timeoutMs) {
+    this.save(data);
+    if (!this.inflight.size) return Promise.resolve(!this.hasUnsynced());
+    const confirmed = Promise.all([...this.inflight]).then(results => results.every(Boolean));
+    const timedOut  = new Promise(resolve => setTimeout(() => resolve(false), timeoutMs));
+    return Promise.race([confirmed, timedOut]);
+  },
+
+  reportError(error) {
+    if (Date.now() - this.lastErrorAt < 30000) return;
+    this.lastErrorAt = Date.now();
+    showToast(error && error.code === 'permission-denied'
+      ? 'Your account refused these changes. Export your data from Settings to keep a copy.'
+      : 'Some changes could not be saved to your account. RunTrack will retry with your next change.', 'error', 8000);
+  }
 };
 
-firebase.initializeApp(FIREBASE_CONFIG);
-const auth = firebase.auth();
-const db   = firebase.firestore();
-
-// Enable offline persistence (keep app working when offline)
-db.settings({ cacheSizeBytes: firebase.firestore.CACHE_SIZE_UNLIMITED });
-db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
-
-let currentUser = null;
-let appData = { plans: [], runs: [], whoopRecovery: null };
+async function refreshFromCloud() {
+  if (!isAccountSession() || !db || Date.now() - lastCloudLoad < CLOUD_REFRESH_MS) return;
+  if (CloudStore.busy() || document.querySelector('.modal.active')) return;
+  lastCloudLoad = Date.now();
+  const { uid } = session;
+  const saves = CloudStore.saveCount;
+  try {
+    const fresh = await CloudStore.fetch(uid);
+    if (!isAccountSession() || session.uid !== uid || CloudStore.saveCount !== saves || CloudStore.busy()) return;
+    if (sameRecords(fresh.plans, appData.plans) && sameRecords(fresh.runs, appData.runs)) return;
+    CloudStore.adopt(uid, fresh);
+    replaceAppData(fresh);
+  } catch (_) { /* keep showing the data already on screen */ }
+}
 
 // ============================================================================
-// AUTH
+// SIGN-IN, SIGN-OUT AND GUEST MODE
 // ============================================================================
+
+const SIGN_OUT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>';
 
 function usernameToEmail(username) {
   return `${username.toLowerCase().trim()}@runtrack.local`;
+}
+
+function authErrorMessage(error, action) {
+  switch (error && error.code) {
+    case 'auth/invalid-credential':
+    case 'auth/invalid-login-credentials':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Incorrect username or password.';
+    case 'auth/email-already-in-use':
+      return 'That username is taken. Try another one.';
+    case 'auth/invalid-email':
+      return 'Usernames can only use letters, numbers and underscores.';
+    case 'auth/weak-password':
+      return 'Use a password with at least 6 characters.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Wait a few minutes and try again.';
+    case 'auth/network-request-failed':
+      return 'Could not reach the sign-in service. Check your connection and try again.';
+    case 'auth/operation-not-allowed':
+      return 'Username sign-in is not enabled for this site.';
+    default:
+      if (!error || !error.code) return 'Could not reach the sign-in service. Check your connection and try again.';
+      return action === 'register' ? 'Could not create your account. Please try again.' : 'Could not sign you in. Please try again.';
+  }
+}
+
+function setBusy(button, busy, label) {
+  button.disabled = busy;
+  button.textContent = label;
 }
 
 async function handleLogin(event) {
@@ -45,195 +309,305 @@ async function handleLogin(event) {
   const username = document.getElementById('loginUsername').value.trim();
   const password = document.getElementById('loginPassword').value;
   const errEl    = document.getElementById('loginError');
-  const btn      = document.getElementById('loginBtn');
-
+  const button   = document.getElementById('loginBtn');
   errEl.textContent = '';
-  btn.disabled = true;
-  btn.textContent = 'Signing in…';
+  if (!username || !password) { errEl.textContent = 'Enter your username and password.'; return; }
 
+  setBusy(button, true, 'Signing in…');
   try {
+    await ensureFirebase();
     await auth.signInWithEmailAndPassword(usernameToEmail(username), password);
-  } catch (e) {
-    errEl.textContent = e.code === 'auth/user-not-found' || e.code === 'auth/wrong-password'
-      ? 'Incorrect username or password.'
-      : e.message;
-    btn.disabled = false;
-    btn.textContent = 'Sign In';
+    finishSignIn();
+  } catch (error) {
+    errEl.textContent = authErrorMessage(error, 'sign-in');
+    setBusy(button, false, 'Sign in');
   }
 }
 
 async function handleRegister(event) {
   event.preventDefault();
-  const username = document.getElementById('registerUsername').value.trim();
-  const password = document.getElementById('registerPassword').value;
-  const confirm  = document.getElementById('registerConfirm').value;
-  const errEl    = document.getElementById('registerError');
-  const btn      = document.getElementById('registerBtn');
-
+  const username     = document.getElementById('registerUsername').value.trim();
+  const password     = document.getElementById('registerPassword').value;
+  const confirmation = document.getElementById('registerConfirm').value;
+  const errEl        = document.getElementById('registerError');
+  const button       = document.getElementById('registerBtn');
   errEl.textContent = '';
-  if (password !== confirm) { errEl.textContent = 'Passwords do not match.'; return; }
+  if (!USERNAME_PATTERN.test(username)) { errEl.textContent = 'Choose a username of 3 to 24 letters, numbers or underscores.'; return; }
+  if (password.length < 6)              { errEl.textContent = 'Use a password with at least 6 characters.'; return; }
+  if (password !== confirmation)        { errEl.textContent = 'The passwords do not match.'; return; }
 
-  btn.disabled = true;
-  btn.textContent = 'Creating account…';
-
+  setBusy(button, true, 'Creating account…');
   try {
-    const cred = await auth.createUserWithEmailAndPassword(usernameToEmail(username), password);
-    await db.collection('users').doc(cred.user.uid).set({
-      username,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
-  } catch (e) {
-    errEl.textContent = e.code === 'auth/email-already-in-use'
-      ? 'That username is already taken.'
-      : e.message;
-    btn.disabled = false;
-    btn.textContent = 'Create Account';
+    await ensureFirebase();
+    const credential = await auth.createUserWithEmailAndPassword(usernameToEmail(username), password);
+    try {
+      await db.collection('users').doc(credential.user.uid).set({
+        username,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (_) { /* the profile only holds the display name */ }
+    finishSignIn();
+  } catch (error) {
+    errEl.textContent = authErrorMessage(error, 'register');
+    setBusy(button, false, 'Create account');
   }
 }
 
-async function logoutUser() {
-  clearUserLocalStorage(currentUser?.uid);
-  await auth.signOut();
-}
-
-function clearUserLocalStorage(uid) {
-  if (!uid) return;
-  const prefix = `rt_${uid}_`;
-  Object.keys(localStorage).filter(k => k.startsWith(prefix))
-    .forEach(k => localStorage.removeItem(k));
+// Reload after signing in so account data never shares memory with guest data.
+function finishSignIn() {
+  storageSet(SESSION_KEY, 'account');
+  if (hasGuestData()) {
+    try { sessionStorage.setItem(IMPORT_OFFER_KEY, '1'); } catch (_) { /* the offer is optional */ }
+  }
+  location.reload();
 }
 
 function toggleAuthMode() {
   const loginForm    = document.getElementById('loginForm');
   const registerForm = document.getElementById('registerForm');
-  const showingLogin = loginForm.style.display !== 'none';
-  loginForm.style.display    = showingLogin ? 'none' : 'block';
-  registerForm.style.display = showingLogin ? 'block' : 'none';
+  const showRegister = !loginForm.hidden;
+  loginForm.hidden    = showRegister;
+  registerForm.hidden = !showRegister;
+  document.getElementById(showRegister ? 'registerUsername' : 'loginUsername').focus();
 }
 
-// Auth state gate — all app boot logic lives here
-auth.onAuthStateChanged(async (user) => {
-  if (user) {
-    currentUser = user;
-
-    // Migrate any pre-auth bare localStorage tokens to namespaced keys
-    migrateLegacyLocalStorage();
-
-    // Show app, hide auth overlay
-    document.getElementById('authOverlay').style.display = 'none';
-    document.getElementById('appShell').style.display    = 'flex';
-    document.getElementById('appShell').style.removeProperty('display');
-    // Apply flex properly
-    document.body.style.flexDirection = '';
-
-    // Load username for display
-    try {
-      const profile = await db.collection('users').doc(user.uid).get();
-      const username = profile.exists ? profile.data().username : user.email.split('@')[0];
-      const headerUser = document.getElementById('headerUsername');
-      if (headerUser) headerUser.textContent = username;
-      const sidebarUser = document.getElementById('sidebarUser');
-      if (sidebarUser) sidebarUser.textContent = username;
-    } catch (_) {}
-
-    await initializeData();
-
-    // Handle OAuth callbacks
-    const didConnectFitbit = await handleFitbitCallback();
-    const didConnectWhoop  = await handleWhoopCallback();
-
-    if (didConnectFitbit || didConnectWhoop) {
-      switchTab('settings');
-    }
-
-    renderAll();
-    updateHeaderInfo();
-
-    if (!didConnectFitbit && isFitbitConnected()) syncFitbitRuns();
-    if (!didConnectWhoop  && isWhoopConnected())  syncWhoopRecovery();
-
-    setupNavListeners();
-
-  } else {
-    currentUser = null;
-    appData = { plans: [], runs: [], whoopRecovery: null };
-    document.getElementById('authOverlay').style.display = 'flex';
-    document.getElementById('appShell').style.display    = 'none';
+async function signOut() {
+  if (!isAccountSession() || signingOut) return;
+  if (!confirm('Sign out on this device? You will need your password to sign back in.')) return;
+  showSplash('Signing out…');
+  const synced = await CloudStore.flush(appData, 5000);
+  if (!synced) {
+    hideSplash();
+    if (!confirm('Some changes have not reached your account yet, probably because you are offline. Sign out anyway and lose them?')) return;
+    showSplash('Signing out…');
   }
-});
 
-function migrateLegacyLocalStorage() {
-  // Move any old (pre-multi-user) tokens to the namespaced keys
-  const toMigrate = [
-    'fitbit_access_token', 'fitbit_refresh_token',
-    'fitbit_token_expires', 'fitbit_last_sync',
-    'runtrack_user_age'
-  ];
-  toMigrate.forEach(k => {
-    const val = localStorage.getItem(k);
-    if (val) {
-      localStorage.setItem(lsKey(k === 'runtrack_user_age' ? 'user_age' : k), val);
-      localStorage.removeItem(k);
-    }
-  });
-}
-
-// ============================================================================
-// PER-USER LOCALSTORAGE HELPER
-// ============================================================================
-
-function lsKey(key) {
-  // currentUser is guaranteed non-null whenever this is called
-  return `rt_${currentUser.uid}_${key}`;
-}
-
-// ============================================================================
-// FIRESTORE DATA LAYER  (replaces Dexie)
-// ============================================================================
-
-function getStorage() { return appData; }
-
-function setStorage(data) {
-  data.plans = sortPlans(data.plans || []);
-  appData = data;
-  persistToDB(data);
-}
-
-async function loadFromDB() {
-  const uid = currentUser.uid;
-  const [plansSnap, runsSnap] = await Promise.all([
-    db.collection('users').doc(uid).collection('plans').get(),
-    db.collection('users').doc(uid).collection('runs').get()
-  ]);
-  appData = {
-    plans: sortPlans(plansSnap.docs.map(d => ({ id: d.id, ...d.data() }))),
-    runs:  runsSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-    whoopRecovery: appData.whoopRecovery || null
-  };
-  return appData;
-}
-
-async function persistToDB(data) {
-  if (!currentUser) return;
-  const uid      = currentUser.uid;
-  const plansCol = db.collection('users').doc(uid).collection('plans');
-  const runsCol  = db.collection('users').doc(uid).collection('runs');
-
+  signingOut = true;
+  const uid = session.uid;
+  try { await auth.signOut(); } catch (_) { /* still clear local state */ }
+  clearLocalNamespace(uid);
+  storageRemove(SESSION_KEY);
   try {
-    // Get existing run IDs so we can delete any that were removed
-    const existingRunsSnap = await runsCol.get();
-    const existingRunIds   = new Set(existingRunsSnap.docs.map(d => d.id));
-    const newRunIds        = new Set(data.runs.map(r => r.id));
+    await db.terminate();
+    await db.clearPersistence();
+  } catch (_) { /* another open tab may still use the offline cache */ }
+  location.reload();
+}
 
-    const batch = db.batch();
-    data.plans.forEach(p => batch.set(plansCol.doc(p.id), p));
-    data.runs.forEach(r  => batch.set(runsCol.doc(r.id),  r));
-    existingRunIds.forEach(id => { if (!newRunIds.has(id)) batch.delete(runsCol.doc(id)); });
-    await batch.commit();
-  } catch (e) {
-    // Silently handle — Firestore offline cache still keeps data
+function showSplash(message) {
+  const splash = document.getElementById('bootSplash');
+  splash.querySelector('.boot-splash-text').textContent = message || 'Loading…';
+  splash.hidden = false;
+}
+
+function hideSplash() {
+  document.getElementById('bootSplash').hidden = true;
+}
+
+function showApp() {
+  hideSplash();
+  document.getElementById('authOverlay').hidden = true;
+  document.getElementById('appShell').style.removeProperty('display');
+}
+
+function showLanding({ focusSignIn = false } = {}) {
+  hideSplash();
+  document.getElementById('appShell').style.display = 'none';
+  const overlay = document.getElementById('authOverlay');
+  overlay.hidden = false;
+  overlay.scrollTop = 0;
+  document.getElementById('accountPanel').hidden = !accountsEnabled();
+  document.getElementById('guestStartBtn').textContent =
+    session || hasGuestData() ? 'Continue as guest' : 'Start without an account';
+  if (focusSignIn && accountsEnabled()) {
+    const loginHidden = document.getElementById('loginForm').hidden;
+    const field = document.getElementById(loginHidden ? 'registerUsername' : 'loginUsername');
+    field.scrollIntoView({ block: 'center' });
+    field.focus({ preventScroll: true });
   }
 }
+
+function showSignIn() {
+  document.querySelectorAll('.modal.active').forEach(modal => closeModal(modal.id));
+  showLanding({ focusSignIn: true });
+}
+
+function continueAsGuest() {
+  if (session && session.mode === 'guest') showApp();
+  else startGuestSession();
+}
+
+function startGuestSession() {
+  session = { mode: 'guest' };
+  storageSet(SESSION_KEY, 'guest');
+  const guest = readGuestData();
+  appData = { plans: sortPlans(guest.plans), runs: guest.runs, whoopRecovery: null };
+  enterApp();
+}
+
+async function startAccountSession() {
+  showSplash('Loading your account…');
+  try {
+    await ensureFirebase();
+  } catch (_) {
+    showLanding();
+    showToast('Could not reach the sync service. Check your connection and reload, or continue without an account.', 'error', 8000);
+    return;
+  }
+  auth.onAuthStateChanged(handleAuthStateChange);
+}
+
+async function handleAuthStateChange(user) {
+  if (signingOut) return;
+  if (!user) {
+    const wasSignedIn = isAccountSession();
+    session = null;
+    storageRemove(SESSION_KEY);
+    if (wasSignedIn) location.reload();
+    else showLanding();
+    return;
+  }
+  if (isAccountSession()) {
+    // A different account signed in from another tab.
+    if (session.uid !== user.uid) location.reload();
+    return;
+  }
+
+  session = { mode: 'account', uid: user.uid, username: (user.email || '').split('@')[0] };
+  storageSet(SESSION_KEY, 'account');
+  showSplash('Loading your plans…');
+
+  const [profile, cloud] = await Promise.allSettled([
+    db.collection('users').doc(user.uid).get(),
+    CloudStore.fetch(user.uid)
+  ]);
+  if (profile.status === 'fulfilled' && profile.value.exists) {
+    const name = profile.value.data().username;
+    if (typeof name === 'string' && name) session.username = name;
+  }
+  const loaded = cloud.status === 'fulfilled' ? cloud.value : { plans: [], runs: [] };
+  CloudStore.adopt(user.uid, loaded);
+  appData = { plans: sortPlans(loaded.plans), runs: loaded.runs, whoopRecovery: null };
+  lastCloudLoad = Date.now();
+
+  await enterApp();
+  if (cloud.status === 'rejected') {
+    showToast('Could not load your synced data. Check your connection and reload the page.', 'error', 9000);
+  } else {
+    offerGuestImport();
+  }
+}
+
+async function enterApp() {
+  showApp();
+  updateAccountChrome();
+
+  let connectedFitbit = false, connectedWhoop = false;
+  try { connectedFitbit = await handleFitbitCallback(); } catch (_) { /* optional integration */ }
+  try { connectedWhoop  = await handleWhoopCallback();  } catch (_) { /* optional integration */ }
+
+  renderAll();
+  updateHeaderInfo();
+  if (connectedFitbit || connectedWhoop) switchTab('settings');
+  if (!connectedFitbit && isFitbitConnected()) Promise.resolve(syncFitbitRuns()).catch(() => {});
+  if (!connectedWhoop  && isWhoopConnected())  Promise.resolve(syncWhoopRecovery()).catch(() => {});
+}
+
+function updateAccountChrome() {
+  const header  = document.getElementById('headerAccount');
+  const sidebar = document.getElementById('sidebarUser');
+  if (isAccountSession()) {
+    header.innerHTML = `
+      <span class="header-username">${escapeHtml(session.username)}</span>
+      <button class="btn-icon" onclick="signOut()" title="Sign out" aria-label="Sign out">${SIGN_OUT_ICON}</button>`;
+    sidebar.textContent = `Signed in as ${session.username}`;
+  } else {
+    header.innerHTML = `
+      <span class="session-chip" title="Your data is saved in this browser only">Guest</span>
+      ${accountsEnabled() ? '<button class="btn btn-secondary btn-sm" onclick="showSignIn()"><span>Sign in<span class="hide-on-phone"> to sync</span></span></button>' : ''}`;
+    sidebar.textContent = 'Guest, saved in this browser';
+  }
+}
+
+// Counts what a guest import would add, without changing anything.
+function previewGuestImport() {
+  const target = { plans: [...appData.plans], runs: [...appData.runs] };
+  return mergeRunTrackData(target, readGuestData());
+}
+
+function offerGuestImport() {
+  let requested = false;
+  try {
+    requested = sessionStorage.getItem(IMPORT_OFFER_KEY) === '1';
+    sessionStorage.removeItem(IMPORT_OFFER_KEY);
+  } catch (_) { /* the offer is optional */ }
+  if (requested) showGuestImportModal(false);
+}
+
+function showGuestImportModal(fromSettings = true) {
+  const { addedPlans, addedRuns } = previewGuestImport();
+  if (!addedPlans && !addedRuns) {
+    if (fromSettings) showToast('Everything from guest mode is already in your account.');
+    return;
+  }
+  document.getElementById('guestImportSummary').textContent =
+    `This browser has ${plural(addedPlans, 'plan')} and ${plural(addedRuns, 'run')} from guest mode that are not in your account. ` +
+    'Import them so they sync to your other devices? Nothing in your account is overwritten.';
+  openModal('guestImportModal');
+}
+
+function importGuestData() {
+  const { addedPlans, addedRuns } = mergeRunTrackData(appData, readGuestData());
+  setStorage(appData);
+  closeModal('guestImportModal');
+  renderAll();
+  updateHeaderInfo();
+  showToast(`Imported ${plural(addedPlans, 'plan')} and ${plural(addedRuns, 'run')} into your account.`, 'success');
+}
+
+function deleteGuestData() {
+  if (!confirm('Delete everything saved in this browser in guest mode, including plans, runs and settings? Your account is not affected.')) return;
+  clearLocalNamespace('guest');
+  renderSettings();
+  showToast('Guest data was deleted from this browser.');
+}
+
+function handleStorageEvent(event) {
+  if (event.key !== GUEST_DATA_KEY || !session || session.mode !== 'guest') return;
+  const fresh = readGuestData();
+  if (sameRecords(fresh.plans, appData.plans) && sameRecords(fresh.runs, appData.runs)) return;
+  replaceAppData(fresh);
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key !== 'Escape') return;
+  const open = document.querySelectorAll('.modal.active');
+  if (open.length) closeModal(open[open.length - 1].id);
+}
+
+function boot() {
+  setTheme(getTheme());
+  updateThemeIcon();
+  restoreSidebarState();
+  setupNavListeners();
+  document.addEventListener('keydown', handleGlobalKeydown);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshFromCloud();
+  });
+  window.addEventListener('storage', handleStorageEvent);
+
+  const mode = storageGet(SESSION_KEY);
+  if (mode === 'guest') {
+    startGuestSession();
+  } else if (mode === 'account' && accountsEnabled()) {
+    startAccountSession();
+  } else {
+    storageRemove(SESSION_KEY);
+    showLanding();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', boot);
 
 function getTheme() { return localStorage.getItem('runtrack_theme') || 'dark'; }
 
@@ -369,6 +743,10 @@ function daysToRaceText(raceDate) {
   if (days === 1) return '1 day to race';
   if (days === 0) return 'Race day';
   return 'Race complete';
+}
+
+function plural(count, word) {
+  return `${count} ${word}${count === 1 ? '' : 's'}`;
 }
 
 function escapeHtml(value) {
@@ -704,15 +1082,6 @@ function mountPlanForm(host, { plan = null, submitLabel = 'Create plan', onSaved
 }
 
 // ============================================================================
-// INITIALIZATION
-// ============================================================================
-
-async function initializeData() {
-  await loadFromDB();
-  appData.plans = sortPlans(appData.plans || []);
-}
-
-// ============================================================================
 // PLAN ADJUSTMENTS
 // ============================================================================
 
@@ -1021,10 +1390,16 @@ function renderDashboard() {
   }, 0);
 }
 
+function chartsAvailable(canvas) {
+  if (typeof Chart !== 'undefined') return true;
+  canvas.parentElement.innerHTML = '<p class="chart-unavailable">Charts could not load. Check your connection and reload the page.</p>';
+  return false;
+}
+
 function renderProgressChart(data) {
   if (progressChartInstance) { progressChartInstance.destroy(); progressChartInstance = null; }
   const canvas = document.getElementById('progressChart');
-  if (!canvas) return;
+  if (!canvas || !chartsAvailable(canvas)) return;
 
   const successColor = getCSSVar('--success') || '#10b981';
   const text2Color   = getCSSVar('--text2')   || '#94a3b8';
@@ -1058,7 +1433,7 @@ function renderProgressChart(data) {
 function renderWeeklyMileageChart(data) {
   if (weeklyChartInstance) { weeklyChartInstance.destroy(); weeklyChartInstance = null; }
   const canvas = document.getElementById('weeklyChart');
-  if (!canvas) return;
+  if (!canvas || !chartsAvailable(canvas)) return;
 
   const successColor = getCSSVar('--success') || '#10b981';
   const accentColor  = getCSSVar('--accent')  || '#3b82f6';
@@ -1308,9 +1683,9 @@ function renderSettings() {
   const whoopConn     = isWhoopConnected();
   const fitLastSync   = localStorage.getItem(lsKey('fitbit_last_sync'));
   const whoopLastSync = localStorage.getItem(lsKey('whoop_last_sync'));
-  const savedFitbitId = (currentUser && localStorage.getItem(lsKey('fitbit_client_id'))) || '';
-  const savedWhoopId  = (currentUser && localStorage.getItem(lsKey('whoop_client_id')))  || '';
-  const savedProxy    = (currentUser && localStorage.getItem(lsKey('whoop_proxy_url')))  || '';
+  const savedFitbitId = (session && localStorage.getItem(lsKey('fitbit_client_id'))) || '';
+  const savedWhoopId  = (session && localStorage.getItem(lsKey('whoop_client_id')))  || '';
+  const savedProxy    = (session && localStorage.getItem(lsKey('whoop_proxy_url')))  || '';
   const hasAIKey      = !!getAnthropicKey();
 
   const syncText = (ts) => ts
@@ -1434,6 +1809,10 @@ function renderSettings() {
     <div class="settings-group">
       <div class="settings-group-label">Data</div>
       <div class="settings-row">
+        <span class="settings-row-key">Stored in</span>
+        <span class="settings-row-val">${isAccountSession() ? 'Your account, synced' : 'This browser only'}</span>
+      </div>
+      <div class="settings-row">
         <span class="settings-row-key">Plans</span>
         <span class="settings-row-val">${data.plans.length}</span>
       </div>
@@ -1450,11 +1829,49 @@ function renderSettings() {
 
     <div class="settings-group settings-group-last">
       <div class="settings-group-label">Account</div>
-      <div class="settings-row-actions">
-        <button class="btn btn-secondary btn-sm" onclick="logoutUser()">Sign out</button>
-      </div>
+      ${accountSettingsMarkup()}
     </div>
   `;
+}
+
+function accountSettingsMarkup() {
+  if (isAccountSession()) {
+    const guest = readGuestData();
+    const guestRecords = guest.plans.length + guest.runs.length;
+    const pending = guestRecords ? previewGuestImport() : { addedPlans: 0, addedRuns: 0 };
+    const hasNew = pending.addedPlans + pending.addedRuns > 0;
+    return `
+      <div class="settings-row">
+        <span class="settings-row-key">Signed in as</span>
+        <span class="settings-row-val">${escapeHtml(session.username)}</span>
+      </div>
+      <p class="settings-help">Your plans and runs sync to your account, so you can sign in on any device. Accounts have no email address, so a forgotten password cannot be reset. Export your data now and then to keep a backup.</p>
+      <div class="settings-row-actions">
+        <button class="btn btn-secondary btn-sm" onclick="signOut()">Sign out</button>
+      </div>
+      ${guestRecords ? `
+      <div class="settings-row">
+        <span class="settings-row-key">Guest data in this browser</span>
+        <span class="settings-row-val">${plural(guest.plans.length, 'plan')}, ${plural(guest.runs.length, 'run')}${hasNew ? '' : ' (already in your account)'}</span>
+      </div>
+      <p class="settings-help">Data from guest mode stays on this device, separate from your account. You return to it when you sign out.</p>
+      <div class="settings-row-actions">
+        ${hasNew ? '<button class="btn btn-secondary btn-sm" onclick="showGuestImportModal()">Import into my account</button>' : ''}
+        <button class="btn btn-secondary btn-sm" onclick="deleteGuestData()">Delete guest data</button>
+      </div>` : ''}`;
+  }
+  return `
+      <div class="settings-row">
+        <span class="settings-row-key">Mode</span>
+        <span class="settings-row-val">Guest</span>
+      </div>
+      <p class="settings-help">${accountsEnabled()
+        ? 'Your plans and runs are saved in this browser only. Sign in or create a free account to back them up and sync them across devices. You can bring your guest data with you.'
+        : 'Your plans and runs are saved in this browser only. Use Export to keep a backup or to move them to another device.'}</p>
+      ${accountsEnabled() ? `
+      <div class="settings-row-actions">
+        <button class="btn btn-primary btn-sm" onclick="showSignIn()">Sign in to sync</button>
+      </div>` : ''}`;
 }
 
 function updateHeaderInfo() {
@@ -1898,11 +2315,11 @@ function performImport() {
       if ((existing.plans.length || existing.runs.length) &&
           !confirm('Replace all of your current plans and runs with this file? This cannot be undone.')) return;
       setStorage({ ...existing, plans: imported.plans, runs: imported.runs });
-      showToast(`Imported ${imported.plans.length} plan(s) and ${imported.runs.length} run(s).`, 'success');
+      showToast(`Imported ${plural(imported.plans.length, 'plan')} and ${plural(imported.runs.length, 'run')}.`, 'success');
     } else {
       const { addedPlans, addedRuns } = mergeRunTrackData(existing, imported);
       setStorage(existing);
-      showToast(`Added ${addedPlans} plan(s) and ${addedRuns} run(s). Duplicates were skipped.`, 'success');
+      showToast(`Added ${plural(addedPlans, 'plan')} and ${plural(addedRuns, 'run')}. Duplicates were skipped.`, 'success');
     }
     closeModal('importModal');
     renderAll();
@@ -1976,7 +2393,8 @@ function exportICS() {
 }
 
 function clearAllData() {
-  if (!confirm('Delete all of your plans and runs? This cannot be undone.')) return;
+  const where = isAccountSession() ? 'from your account on every device' : 'from this browser';
+  if (!confirm(`Delete all of your plans and runs ${where}? This cannot be undone.`)) return;
   setStorage({ ...getStorage(), plans: [], runs: [], whoopRecovery: null });
   renderAll();
   updateHeaderInfo();
@@ -2015,8 +2433,12 @@ function renderAll() {
 
 function switchTab(tab) {
   document.querySelectorAll('.nav-item').forEach(i => {
-    i.classList.toggle('active', i.dataset.tab === tab);
+    const active = i.dataset.tab === tab;
+    i.classList.toggle('active', active);
+    if (active) i.setAttribute('aria-current', 'page');
+    else i.removeAttribute('aria-current');
   });
+  window.scrollTo(0, 0);
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   const targetView = document.getElementById(tab);
   if (targetView) targetView.classList.add('active');
@@ -2031,27 +2453,11 @@ function switchTab(tab) {
 
 function setupNavListeners() {
   document.querySelectorAll('.nav-item[data-tab]').forEach(item => {
-    item.addEventListener('click', (e) => {
-      e.preventDefault();
+    item.addEventListener('click', (event) => {
+      event.preventDefault();
       switchTab(item.dataset.tab);
-      if (window.innerWidth <= 768) {
-        const sidebar = document.getElementById('sidebar');
-        if (sidebar) sidebar.classList.remove('open');
-      }
     });
   });
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  setTheme(getTheme());
-  updateThemeIcon();
-  restoreSidebarState();
-  // onAuthStateChanged handles everything else
-});
-
-function toggleSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  if (sidebar) sidebar.classList.toggle('open');
 }
 
 // ============================================================================
@@ -2062,7 +2468,7 @@ const FITBIT_CLIENT_ID   = 'YOUR_FITBIT_CLIENT_ID';
 const FITBIT_REDIRECT_URI = (() => { const u = new URL(window.location.href); u.search = ''; u.hash = ''; return u.toString(); })();
 
 function getFitbitClientId() {
-  return (currentUser && localStorage.getItem(lsKey('fitbit_client_id'))) || FITBIT_CLIENT_ID;
+  return (session && localStorage.getItem(lsKey('fitbit_client_id'))) || FITBIT_CLIENT_ID;
 }
 function saveFitbitClientId(id) { localStorage.setItem(lsKey('fitbit_client_id'), id.trim()); }
 
@@ -2155,7 +2561,7 @@ async function getValidFitbitToken() {
 }
 
 function isFitbitConnected() {
-  return !!(currentUser && localStorage.getItem(lsKey('fitbit_access_token')));
+  return !!(session && localStorage.getItem(lsKey('fitbit_access_token')));
 }
 
 function disconnectFitbit() {
@@ -2340,11 +2746,11 @@ const WHOOP_REDIRECT_URI = FITBIT_REDIRECT_URI;
 const WHOOP_TOKEN_PROXY  = ''; // set to your proxy URL
 
 function getWhoopClientId() {
-  return (currentUser && localStorage.getItem(lsKey('whoop_client_id'))) || WHOOP_CLIENT_ID;
+  return (session && localStorage.getItem(lsKey('whoop_client_id'))) || WHOOP_CLIENT_ID;
 }
 function saveWhoopClientId(id) { localStorage.setItem(lsKey('whoop_client_id'), id.trim()); }
 function getWhoopProxyUrl() {
-  return (currentUser && localStorage.getItem(lsKey('whoop_proxy_url'))) || WHOOP_TOKEN_PROXY;
+  return (session && localStorage.getItem(lsKey('whoop_proxy_url'))) || WHOOP_TOKEN_PROXY;
 }
 function saveWhoopProxyUrl(url) { localStorage.setItem(lsKey('whoop_proxy_url'), url.trim()); }
 
@@ -2427,7 +2833,7 @@ async function getValidWhoopToken() {
 }
 
 function isWhoopConnected() {
-  return !!(currentUser && localStorage.getItem(lsKey('whoop_access_token')));
+  return !!(session && localStorage.getItem(lsKey('whoop_access_token')));
 }
 
 function disconnectWhoop() {

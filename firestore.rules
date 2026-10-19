@@ -1,17 +1,43 @@
 rules_version = '2';
+
+// RunTrack keeps each account's data under its own user document:
+//   users/{uid}             profile: { username, createdAt }
+//   users/{uid}/plans/{id}  one document per training plan
+//   users/{uid}/runs/{id}   one document per logged run
+// Only the signed-in owner can read or write these documents. Any path that is
+// not matched below, including listing all users, is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Each user can only read/write their own data
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function validProfile() {
+      return request.resource.data.keys().hasOnly(['username', 'createdAt'])
+        && request.resource.data.username is string
+        && request.resource.data.username.size() >= 3
+        && request.resource.data.username.size() <= 24
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    // Every plan and run stores its own ID, which must match the document ID.
+    function validRecord(id) {
+      return request.resource.data.id == id;
+    }
+
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow get, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validProfile();
 
       match /plans/{planId} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validRecord(planId);
       }
 
       match /runs/{runId} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validRecord(runId);
       }
     }
   }
