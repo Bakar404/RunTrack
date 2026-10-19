@@ -1262,7 +1262,7 @@ function renderDashboard() {
     const when = daysAway === 0 ? 'Today'
       : daysAway < 7 ? dayOfWeek(parseDate(nextRun.date))
       : escapeHtml(formatDisplayDate(nextRun.date, { weekday: 'short', month: 'short', day: 'numeric' }));
-    nextRunLabel = `${when}<br><span style="font-size:13px;font-weight:600;letter-spacing:0;color:var(--text2);">${runTypeLabel(nextRun.type)} · ${nextRun.plannedDistance} mi</span>`;
+    nextRunLabel = `${when}<br><span style="font-size:13px;font-weight:600;letter-spacing:0;color:var(--text2);">${runTypeLabel(nextRun.type)} · ${nextRun.plannedDistance}&nbsp;mi</span>`;
   } else if (daysToRace < 0 || currentWeek) {
     nextRunLabel = `<span style="color:var(--success);">All done</span>`;
   }
@@ -1323,7 +1323,7 @@ function renderDashboard() {
         <div class="race-banner-label">${bannerLabel}</div>
       </div>
       <div class="race-banner-divider"></div>
-      <div style="flex:1;padding-left:var(--spacing-xl);">
+      <div class="race-banner-progress">
         <div style="font-size:14px;color:var(--text2);margin-bottom:4px;">Overall progress</div>
         <div style="font-size:20px;font-weight:700;">${completedRuns} of ${totalPlanRuns} runs complete</div>
         <div class="progress-bar" style="margin-top:10px;">

@@ -1337,6 +1337,7 @@ textarea.form-input {
 .view-intro {
   font-size: 14px;
   color: var(--text2);
+  margin-top: calc(-1 * var(--spacing-lg));
   margin-bottom: var(--spacing-xl);
   max-width: 720px;
 }
@@ -1789,6 +1790,11 @@ body:not(.has-plan) .fab { display: none; }
   flex-shrink: 0;
 }
 
+.race-banner-progress {
+  flex: 1;
+  padding-left: var(--spacing-xl);
+}
+
 .grid-3 {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -2181,6 +2187,7 @@ details summary::-webkit-details-marker { display: none; }
   }
 
   .race-banner-divider { display: none; }
+  .race-banner-progress { padding-left: 0; align-self: stretch; }
 
   .effort-grid { grid-template-columns: repeat(5, 1fr); }
 
