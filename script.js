@@ -502,15 +502,18 @@ async function enterApp() {
   showApp();
   updateAccountChrome();
 
-  let connectedFitbit = false, connectedWhoop = false;
-  try { connectedFitbit = await handleFitbitCallback(); } catch (_) { /* optional integration */ }
-  try { connectedWhoop  = await handleWhoopCallback();  } catch (_) { /* optional integration */ }
+  // Each handler returns null when the page was not opened by its OAuth
+  // redirect, otherwise whether the connection succeeded.
+  let fitbitResult = null, whoopResult = null;
+  try { fitbitResult = await handleFitbitCallback(); } catch (_) { fitbitResult = false; }
+  try { whoopResult  = await handleWhoopCallback();  } catch (_) { whoopResult = false; }
 
   renderAll();
   updateHeaderInfo();
-  if (connectedFitbit || connectedWhoop) switchTab('settings');
-  if (!connectedFitbit && isFitbitConnected()) Promise.resolve(syncFitbitRuns()).catch(() => {});
-  if (!connectedWhoop  && isWhoopConnected())  Promise.resolve(syncWhoopRecovery()).catch(() => {});
+  if (fitbitResult !== null)     openDeviceSettings('fitbit', false);
+  else if (whoopResult !== null) openDeviceSettings('whoop', false);
+  if (isFitbitConnected()) syncFitbitRuns({ notify: fitbitResult === true }).catch(() => {});
+  if (isWhoopConnected())  syncWhoopData({ notify: whoopResult === true }).catch(() => {});
 }
 
 function updateAccountChrome() {
@@ -1660,32 +1663,15 @@ function renderPlans() {
 // RENDERING — SETTINGS
 // ============================================================================
 
-function saveFitbitClientIdAndConnect() {
-  const id = document.getElementById('fitbitClientIdInput')?.value?.trim();
-  if (!id) { alert('Please enter your Fitbit Client ID.'); return; }
-  saveFitbitClientId(id);
-  connectFitbit();
-}
-
-function saveWhoopCredsAndConnect() {
-  const clientId = document.getElementById('whoopClientIdInput')?.value?.trim();
-  const proxy    = document.getElementById('whoopProxyInput')?.value?.trim();
-  if (!clientId) { alert('Please enter your Whoop Client ID.'); return; }
-  if (!proxy)    { alert('Please enter your Whoop token proxy URL.'); return; }
-  saveWhoopClientId(clientId);
-  saveWhoopProxyUrl(proxy);
-  connectWhoop();
-}
-
 function renderSettings() {
   const data          = getStorage();
   const fitConnected  = isFitbitConnected();
   const whoopConn     = isWhoopConnected();
-  const fitLastSync   = localStorage.getItem(lsKey('fitbit_last_sync'));
-  const whoopLastSync = localStorage.getItem(lsKey('whoop_last_sync'));
-  const savedFitbitId = (session && localStorage.getItem(lsKey('fitbit_client_id'))) || '';
-  const savedWhoopId  = (session && localStorage.getItem(lsKey('whoop_client_id')))  || '';
-  const savedProxy    = (session && localStorage.getItem(lsKey('whoop_proxy_url')))  || '';
+  const fitLastSync   = storageGet(lsKey('fitbit_last_sync'));
+  const whoopLastSync = storageGet(lsKey('whoop_last_sync'));
+  const savedFitbitId = readDeviceSetting('fitbit_client_id');
+  const savedWhoopId  = readDeviceSetting('whoop_client_id');
+  const savedProxy    = readDeviceSetting('whoop_proxy_url');
   const hasAIKey      = !!getAnthropicKey();
 
   const syncText = (ts) => ts
@@ -1748,7 +1734,7 @@ function renderSettings() {
       </div>
     </div>
 
-    <div class="settings-group">
+    <div class="settings-group" id="settings-fitbit">
       <div class="settings-group-label">Fitbit</div>
       ${fitConnected ? `
       <div class="settings-row">
@@ -1760,23 +1746,28 @@ function renderSettings() {
         <span class="settings-row-val">${syncText(fitLastSync)}</span>
       </div>
       <div class="settings-row-actions">
-        <button class="btn btn-primary btn-sm" id="fitbitSyncBtn" onclick="syncFitbitRuns()">Sync Now</button>
+        <button class="btn btn-primary btn-sm" id="fitbitSyncBtn" onclick="syncFitbitRuns({ notify: true })">Sync now</button>
         <button class="btn btn-secondary btn-sm" onclick="disconnectFitbit()">Disconnect</button>
       </div>
       ` : `
-      <p class="settings-help">Enter your Fitbit app's Client ID to connect. Create one at <strong>dev.fitbit.com</strong> → Register an App (type: Personal, callback: <code>${FITBIT_REDIRECT_URI}</code>).</p>
+      <p class="settings-help">Import runs and heart rate data through your own Fitbit developer app. Google is shutting down the Fitbit Web API on October 30, 2026.</p>
       <div class="settings-row">
-        <span class="settings-row-key">Client ID</span>
-        <input type="text" class="settings-inline-input wide" id="fitbitClientIdInput" value="${savedFitbitId}" placeholder="e.g. ABC123" autocomplete="off" />
+        <label class="settings-row-key" for="fitbitClientIdInput">Client ID</label>
+        <input type="text" class="settings-inline-input wide" id="fitbitClientIdInput" value="${escapeHtml(savedFitbitId)}" placeholder="e.g. ABC123" autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="settings-row settings-row-wrap">
+        <span class="settings-row-key">Callback URL</span>
+        ${redirectUriMarkup()}
       </div>
       <div class="settings-row-actions">
-        <button class="btn btn-primary btn-sm" onclick="saveFitbitClientIdAndConnect()">Connect Fitbit</button>
+        <button class="btn btn-primary btn-sm" onclick="connectFitbit()">Connect Fitbit</button>
+        <button class="btn btn-secondary btn-sm" onclick="showDeviceGuide('fitbit')">Setup guide</button>
       </div>
       `}
     </div>
 
-    <div class="settings-group">
-      <div class="settings-group-label">Whoop</div>
+    <div class="settings-group" id="settings-whoop">
+      <div class="settings-group-label">Whoop <span class="badge-muted">Advanced</span></div>
       ${whoopConn ? `
       <div class="settings-row">
         <span class="settings-row-key">Status</span>
@@ -1787,21 +1778,22 @@ function renderSettings() {
         <span class="settings-row-val">${syncText(whoopLastSync)}</span>
       </div>
       <div class="settings-row-actions">
-        <button class="btn btn-primary btn-sm" id="whoopSyncBtn" onclick="syncWhoopData()">Sync Now</button>
+        <button class="btn btn-primary btn-sm" id="whoopSyncBtn" onclick="syncWhoopData({ notify: true })">Sync now</button>
         <button class="btn btn-secondary btn-sm" onclick="disconnectWhoop()">Disconnect</button>
       </div>
       ` : `
-      <p class="settings-help">Whoop requires a Client ID (from <strong>developer.whoop.com</strong>) and a token proxy URL. See the <strong>Devices</strong> tab for step-by-step setup.</p>
+      <p class="settings-help">For self-hosters. Whoop requires a client secret, so you need your own Whoop developer app and a small token proxy that you host. The setup guide has the steps and the proxy code.</p>
       <div class="settings-row">
-        <span class="settings-row-key">Client ID</span>
-        <input type="text" class="settings-inline-input wide" id="whoopClientIdInput" value="${savedWhoopId}" placeholder="From developer.whoop.com" autocomplete="off" />
+        <label class="settings-row-key" for="whoopClientIdInput">Client ID</label>
+        <input type="text" class="settings-inline-input wide" id="whoopClientIdInput" value="${escapeHtml(savedWhoopId)}" placeholder="From the Whoop dashboard" autocomplete="off" spellcheck="false" />
       </div>
       <div class="settings-row">
-        <span class="settings-row-key">Proxy URL</span>
-        <input type="text" class="settings-inline-input wide" id="whoopProxyInput" value="${savedProxy}" placeholder="https://your-worker.workers.dev" autocomplete="off" />
+        <label class="settings-row-key" for="whoopProxyInput">Token proxy URL</label>
+        <input type="url" class="settings-inline-input wide" id="whoopProxyInput" value="${escapeHtml(savedProxy)}" placeholder="https://your-proxy.example.com/token" autocomplete="off" spellcheck="false" />
       </div>
       <div class="settings-row-actions">
-        <button class="btn btn-primary btn-sm" onclick="saveWhoopCredsAndConnect()">Connect Whoop</button>
+        <button class="btn btn-primary btn-sm" onclick="connectWhoop()">Connect Whoop</button>
+        <button class="btn btn-secondary btn-sm" onclick="showDeviceGuide('whoop')">Setup guide</button>
       </div>
       `}
     </div>
@@ -2461,121 +2453,208 @@ function setupNavListeners() {
 }
 
 // ============================================================================
-// FITBIT INTEGRATION
+// DEVICE INTEGRATIONS (optional)
 // ============================================================================
+//
+// Fitbit and Whoop are optional. This site ships no client IDs: each person
+// registers their own developer app and enters its details in Settings. OAuth
+// tokens are kept only in this browser's localStorage and are sent only to the
+// provider, or for Whoop token requests, to the proxy that the user hosts.
 
-const FITBIT_CLIENT_ID   = 'YOUR_FITBIT_CLIENT_ID';
-const FITBIT_REDIRECT_URI = (() => { const u = new URL(window.location.href); u.search = ''; u.hash = ''; return u.toString(); })();
+// Providers redirect back to this page without its query, hash or a trailing
+// index.html, so the URL matches the one users register with the provider.
+const OAUTH_REDIRECT_URI = (() => {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  url.pathname = url.pathname.replace(/index\.html$/, '');
+  return url.toString();
+})();
 
-function getFitbitClientId() {
-  return (session && localStorage.getItem(lsKey('fitbit_client_id'))) || FITBIT_CLIENT_ID;
+function readDeviceSetting(name) {
+  return session ? (storageGet(lsKey(name)) || '').trim() : '';
 }
-function saveFitbitClientId(id) { localStorage.setItem(lsKey('fitbit_client_id'), id.trim()); }
+
+function saveDeviceSetting(name, value) {
+  const clean = String(value || '').trim();
+  if (clean) storageSet(lsKey(name), clean);
+  else storageRemove(lsKey(name));
+}
 
 function base64URLEncode(buffer) {
   return btoa(String.fromCharCode(...new Uint8Array(buffer)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-async function generateCodeVerifier() {
-  const buf = new Uint8Array(32);
-  crypto.getRandomValues(buf);
-  return base64URLEncode(buf);
+function randomToken(byteLength) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return base64URLEncode(bytes);
 }
 
-async function generateCodeChallenge(verifier) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-  return base64URLEncode(digest);
-}
+async function startOAuth(provider, authorizeUrl, params) {
+  if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
+    showToast('Connecting a device needs a secure (https) page.', 'error', 7000);
+    return;
+  }
+  const verifier  = randomToken(32);
+  const challenge = base64URLEncode(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  const state     = `${provider}_${randomToken(12)}`;
+  storageSet(lsKey(`${provider}_pkce_verifier`), verifier);
+  storageSet(lsKey(`${provider}_oauth_state`), state);
 
-async function connectFitbit() {
-  const verifier   = await generateCodeVerifier();
-  const challenge  = await generateCodeChallenge(verifier);
-  const stateBuf   = new Uint8Array(8);
-  crypto.getRandomValues(stateBuf);
-  const state = 'fitbit_' + base64URLEncode(stateBuf);
-
-  localStorage.setItem(lsKey('fitbit_pkce_verifier'), verifier);
-  localStorage.setItem(lsKey('fitbit_oauth_state'),   state);
-
-  const params = new URLSearchParams({
-    response_type: 'code', client_id: getFitbitClientId(),
-    redirect_uri: FITBIT_REDIRECT_URI, scope: 'activity heartrate',
-    code_challenge: challenge, code_challenge_method: 'S256', state,
+  const query = new URLSearchParams({
+    ...params,
+    response_type: 'code',
+    redirect_uri: OAUTH_REDIRECT_URI,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
   });
-  window.location.href = 'https://www.fitbit.com/oauth2/authorize?' + params;
+  window.location.assign(`${authorizeUrl}?${query}`);
 }
 
-async function handleFitbitCallback() {
+// Returns null when the current URL is not an OAuth callback for `provider`,
+// otherwise { code, verifier } or { error }.
+function readOAuthCallback(provider) {
   const params = new URLSearchParams(window.location.search);
-  const code   = params.get('code');
-  const state  = params.get('state');
-  if (!code || !state?.startsWith('fitbit_')) return false;
+  const state  = params.get('state') || '';
+  if (!state.startsWith(`${provider}_`)) return null;
 
   window.history.replaceState({}, '', window.location.pathname);
+  const storedState = storageGet(lsKey(`${provider}_oauth_state`));
+  const verifier    = storageGet(lsKey(`${provider}_pkce_verifier`));
+  storageRemove(lsKey(`${provider}_oauth_state`));
+  storageRemove(lsKey(`${provider}_pkce_verifier`));
 
-  const storedState = localStorage.getItem(lsKey('fitbit_oauth_state'));
-  const verifier    = localStorage.getItem(lsKey('fitbit_pkce_verifier'));
-  localStorage.removeItem(lsKey('fitbit_oauth_state'));
-  localStorage.removeItem(lsKey('fitbit_pkce_verifier'));
+  if (params.get('error')) return { error: params.get('error') };
+  if (!params.get('code') || state !== storedState || !verifier) return { error: 'invalid_state' };
+  return { code: params.get('code'), verifier };
+}
 
-  if (state !== storedState || !verifier) return false;
+function saveOAuthTokens(provider, tokens, defaultLifetimeSec) {
+  if (!tokens || !tokens.access_token) throw new Error('No access token in response');
+  storageSet(lsKey(`${provider}_access_token`), tokens.access_token);
+  if (tokens.refresh_token) storageSet(lsKey(`${provider}_refresh_token`), tokens.refresh_token);
+  storageSet(lsKey(`${provider}_token_expires`), String(Date.now() + (tokens.expires_in || defaultLifetimeSec) * 1000));
+}
 
+function clearOAuthTokens(provider) {
+  ['access_token', 'refresh_token', 'token_expires', 'last_sync']
+    .forEach(name => storageRemove(lsKey(`${provider}_${name}`)));
+}
+
+function hasFreshToken(provider) {
+  const expires = parseInt(storageGet(lsKey(`${provider}_token_expires`)) || '0', 10);
+  return Date.now() < expires - 60000;
+}
+
+function setSyncBusy(buttonId, busy) {
+  const button = document.getElementById(buttonId);
+  if (!button) return;
+  button.disabled = busy;
+  button.textContent = busy ? 'Syncing…' : 'Sync now';
+}
+
+async function copyText(text, successMessage = 'Copied.') {
   try {
-    const res = await fetch('https://api.fitbit.com/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: getFitbitClientId(), grant_type: 'authorization_code',
-        redirect_uri: FITBIT_REDIRECT_URI, code, code_verifier: verifier }),
-    });
-    if (!res.ok) return false;
-    saveFitbitTokens(await res.json());
-    return true;
-  } catch (e) { return false; }
+    await navigator.clipboard.writeText(text);
+    showToast(successMessage, 'success');
+    return;
+  } catch (_) { /* fall back below */ }
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.style.position = 'fixed';
+  field.style.opacity = '0';
+  document.body.appendChild(field);
+  field.select();
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch (_) { copied = false; }
+  field.remove();
+  showToast(copied ? successMessage : 'Could not copy. Select the address and copy it yourself.', copied ? 'success' : 'error');
 }
 
-function saveFitbitTokens(tokens) {
-  localStorage.setItem(lsKey('fitbit_access_token'),  tokens.access_token);
-  if (tokens.refresh_token) localStorage.setItem(lsKey('fitbit_refresh_token'), tokens.refresh_token);
-  localStorage.setItem(lsKey('fitbit_token_expires'), Date.now() + (tokens.expires_in || 28800) * 1000);
+function copyRedirectUri() {
+  copyText(OAUTH_REDIRECT_URI, 'Callback URL copied.');
 }
 
-async function getValidFitbitToken() {
-  const expires = parseInt(localStorage.getItem(lsKey('fitbit_token_expires')) || '0');
-  if (Date.now() < expires - 60000) return localStorage.getItem(lsKey('fitbit_access_token'));
-
-  const refreshToken = localStorage.getItem(lsKey('fitbit_refresh_token'));
-  if (!refreshToken) { disconnectFitbit(); return null; }
-
-  try {
-    const res = await fetch('https://api.fitbit.com/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: getFitbitClientId() }),
-    });
-    if (!res.ok) { disconnectFitbit(); return null; }
-    const tokens = await res.json();
-    saveFitbitTokens(tokens);
-    return tokens.access_token;
-  } catch (e) { return null; }
+function redirectUriMarkup() {
+  return `<span class="copy-field"><code>${escapeHtml(OAUTH_REDIRECT_URI)}</code><button type="button" class="btn btn-secondary btn-sm" onclick="copyRedirectUri()">Copy</button></span>`;
 }
 
-function isFitbitConnected() {
-  return !!(session && localStorage.getItem(lsKey('fitbit_access_token')));
+function showDeviceGuide(id) {
+  switchTab('devices');
+  const card = document.getElementById(`device-${id}`);
+  if (card) card.scrollIntoView({ block: 'start' });
 }
 
-function disconnectFitbit() {
-  ['fitbit_access_token', 'fitbit_refresh_token', 'fitbit_token_expires', 'fitbit_last_sync']
-    .forEach(k => localStorage.removeItem(lsKey(k)));
-  renderSettings();
+function openDeviceSettings(id, focusInput = true) {
+  switchTab('settings');
+  const group = document.getElementById(`settings-${id}`);
+  if (group) group.scrollIntoView({ block: 'start' });
+  const input = focusInput && document.getElementById(`${id}ClientIdInput`);
+  if (input) input.focus({ preventScroll: true });
 }
+
+// Re-render the views that show device data. The dashboard is skipped while it
+// shows the onboarding form, so a background sync never clears what the
+// visitor is typing.
+function refreshDeviceViews(runsChanged) {
+  if (getStorage().plans.length) renderDashboard();
+  if (runsChanged) { renderSchedule(); renderHistory(); }
+}
+
+// Add a device run to the plan day with the same calendar date, or refresh one
+// imported earlier. Runs logged by hand or imported from another device are
+// never overwritten, and when a day has several runs from the same device the
+// longest one is kept. Returns true when the stored data changed.
+function mergeDeviceRun({ data, plan, runLog, idField, id, date, values, effortSource, notes }) {
+  const plannedRun = findPlannedRun(plan, date);
+  if (!plannedRun) return false;
+
+  let run = runLog[date];
+  if (run) {
+    if (!run[idField]) return false;
+    if (run[idField] !== id && values.distance <= run.distance) return false;
+    const unchanged = run[idField] === id &&
+      Object.keys(values).every(key => JSON.stringify(run[key]) === JSON.stringify(values[key]));
+    if (unchanged) return false;
+    Object.assign(run, values, { [idField]: id });
+  } else {
+    run = {
+      id: generateUUID(), planId: plan.id, date, type: plannedRun.type,
+      ...values, effort: 0, effortSource: 'none', notes, [idField]: id,
+    };
+    data.runs.push(run);
+    runLog[date] = run;
+  }
+  if (run.effortSource !== 'manual') {
+    const effort = calculateAutoEffort(run, data.runs);
+    if (effort) { run.effort = effort; run.effortSource = effortSource; }
+  }
+  return true;
+}
+
+// ============================================================================
+// HEART RATE AND EFFORT
+// ============================================================================
+
+const DEFAULT_AGE = 30;
 
 function getUserAge() {
-  return parseInt(localStorage.getItem(lsKey('user_age')) || '23');
+  const age = parseInt(storageGet(lsKey('user_age')), 10);
+  return age >= 10 && age <= 100 ? age : DEFAULT_AGE;
 }
 
-function saveUserAge(age) {
-  localStorage.setItem(lsKey('user_age'), String(parseInt(age) || 23));
+function saveUserAge(value) {
+  const age = parseInt(value, 10);
+  if (!(age >= 10 && age <= 100)) {
+    showToast('Enter an age between 10 and 100.', 'error');
+    renderSettings();
+    return;
+  }
+  storageSet(lsKey('user_age'), String(age));
 }
 
 function calculateAutoEffort(run, allRuns) {
@@ -2630,470 +2709,585 @@ function calculateAutoEffort(run, allRuns) {
   )));
 }
 
-async function syncFitbitRuns() {
-  const btn   = document.getElementById('fitbitSyncBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+// ============================================================================
+// FITBIT INTEGRATION
+// ============================================================================
+//
+// OAuth 2.0 with PKCE, so no client secret or server is needed. A Fitbit app of
+// type "Personal" can only read the account that registered it, which is why
+// each person connects their own app. Google is shutting down the Fitbit Web
+// API on October 30, 2026.
 
-  const token = await getValidFitbitToken();
-  if (!token) { if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; } return { error: 'not_connected' }; }
+const FITBIT_AUTHORIZE_URL   = 'https://www.fitbit.com/oauth2/authorize';
+const FITBIT_TOKEN_URL       = 'https://api.fitbit.com/oauth2/token';
+const FITBIT_ACTIVITIES_URL  = 'https://api.fitbit.com/1/user/-/activities/list.json';
+const FITBIT_RUNNING_TYPE_ID = 90009;  // the "Run" activity type
 
-  const data = getStorage();
-  if (!data.plans.length) return { synced: 0 };
-  const plan = data.plans[0];
+// Fitbit's "Run" type, plus exercises whose name says they were runs.
+function isFitbitRun(activity) {
+  const name = activity.activityName || '';
+  if (/\b(walk|hike|step)/i.test(name)) return false;
+  return activity.activityTypeId === FITBIT_RUNNING_TYPE_ID || /run|jog|treadmill/i.test(name);
+}
 
-  const allActivities = [];
-  let offset = 0;
+function getFitbitClientId() {
+  return readDeviceSetting('fitbit_client_id');
+}
+
+function isFitbitConnected() {
+  return !!(session && storageGet(lsKey('fitbit_access_token')));
+}
+
+async function connectFitbit() {
+  const input = document.getElementById('fitbitClientIdInput');
+  if (input) saveDeviceSetting('fitbit_client_id', input.value);
+  const clientId = getFitbitClientId();
+  if (!clientId) {
+    showToast('Enter the Client ID of your Fitbit app first. The setup guide shows where to find it.', 'error', 7000);
+    if (input) input.focus();
+    return;
+  }
+  if (!/^[A-Za-z0-9]{4,16}$/.test(clientId)) {
+    showToast('That does not look like a Fitbit Client ID. It is a short code of letters and numbers, such as ABC123.', 'error', 7000);
+    if (input) input.focus();
+    return;
+  }
+  await startOAuth('fitbit', FITBIT_AUTHORIZE_URL, { client_id: clientId, scope: 'activity heartrate' });
+}
+
+async function handleFitbitCallback() {
+  const callback = readOAuthCallback('fitbit');
+  if (!callback) return null;
+  if (callback.error) {
+    showToast(callback.error === 'access_denied'
+      ? 'Fitbit was not connected because access was not approved.'
+      : 'Fitbit could not be connected. Please try again.', 'error', 7000);
+    return false;
+  }
   try {
-    while (true) {
-      const url = new URL('https://api.fitbit.com/1/user/-/activities/list.json');
-      url.searchParams.set('afterDate', plan.startDate);
-      url.searchParams.set('sort', 'asc');
-      url.searchParams.set('limit', '100');
-      url.searchParams.set('offset', String(offset));
-      const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) break;
-      const json  = await res.json();
-      const batch = json.activities || [];
-      allActivities.push(...batch);
-      if (batch.length < 100) break;
-      offset += 100;
+    const res = await fetch(FITBIT_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: getFitbitClientId(), grant_type: 'authorization_code',
+        redirect_uri: OAUTH_REDIRECT_URI, code: callback.code, code_verifier: callback.verifier,
+      }),
+    });
+    if (!res.ok) {
+      showToast('Fitbit did not accept the connection. Check that the Client ID and Callback URL match your Fitbit app.', 'error', 9000);
+      return false;
     }
-  } catch (e) {
-    if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; }
-    return { error: 'fetch_failed' };
+    saveOAuthTokens('fitbit', await res.json(), 28800);
+    showToast('Fitbit connected.', 'success');
+    return true;
+  } catch (_) {
+    showToast('Could not reach Fitbit. Check your connection and try again.', 'error', 7000);
+    return false;
   }
+}
 
-  const RUN_TYPE_IDS  = new Set([90009, 90013, 90015, 90001, 90003, 90024]);
-  const runActivities = allActivities.filter(a => {
-    const name = (a.activityName || '').toLowerCase();
-    if (/\b(walk|hike|step)/i.test(a.activityName)) return false;
-    return RUN_TYPE_IDS.has(a.activityTypeId) || /run|jog/i.test(name);
-  });
+async function getValidFitbitToken() {
+  if (hasFreshToken('fitbit')) return storageGet(lsKey('fitbit_access_token'));
+  const refreshToken = storageGet(lsKey('fitbit_refresh_token'));
+  if (!refreshToken) { disconnectFitbit(); return null; }
+  try {
+    const res = await fetch(FITBIT_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: getFitbitClientId() }),
+    });
+    if (res.status === 400 || res.status === 401) { disconnectFitbit(); return null; }
+    if (!res.ok) return null;
+    const tokens = await res.json();
+    saveOAuthTokens('fitbit', tokens, 28800);
+    return tokens.access_token;
+  } catch (_) { return null; }
+}
 
-  const runLog = {};
-  data.runs.forEach(r => { if (r.planId === plan.id) runLog[r.date] = r; });
-
-  let synced = 0;
-  for (const activity of runActivities) {
-    const date = activity.startTime.substring(0, 10);
-    let distanceMiles = activity.distance || 0;
-    const unit = (activity.distanceUnit || '').toLowerCase();
-    if (unit === 'kilometer' || unit === 'km') distanceMiles *= 0.621371;
-    distanceMiles = Math.round(distanceMiles * 100) / 100;
-    if (distanceMiles < 0.1) continue;
-
-    const durationSec   = Math.round((activity.duration || 0) / 1000);
-    const avgHeartRate  = activity.averageHeartRate || 0;
-    const heartRateZones = activity.heartRateZones || [];
-
-    let plannedRun = null;
-    for (const week of plan.weeks) {
-      const found = week.runs.find(r => r.date === date);
-      if (found) { plannedRun = found; break; }
-    }
-    if (!plannedRun) continue;
-
-    if (runLog[date]) {
-      if (runLog[date].fitbitId && RUN_TYPE_IDS.has(activity.activityTypeId)) {
-        runLog[date].distance      = distanceMiles;
-        runLog[date].time          = durationSec;
-        runLog[date].fitbitId      = activity.logId;
-        runLog[date].avgHeartRate  = avgHeartRate;
-        runLog[date].heartRateZones = heartRateZones;
-        if (runLog[date].effortSource !== 'manual') {
-          const autoEffort = calculateAutoEffort(runLog[date], data.runs);
-          if (autoEffort) { runLog[date].effort = autoEffort; runLog[date].effortSource = 'auto'; }
-        }
-        synced++;
-      }
-      continue;
-    }
-
-    const newRun = {
-      id: generateUUID(), planId: plan.id, date, type: plannedRun.type,
-      distance: distanceMiles, time: durationSec,
-      avgHeartRate, heartRateZones,
-      effort: 0, effortSource: 'none',
-      notes: 'Synced from Fitbit', fitbitId: activity.logId,
-    };
-    const autoEffort = calculateAutoEffort(newRun, data.runs);
-    if (autoEffort) { newRun.effort = autoEffort; newRun.effortSource = 'auto'; }
-    data.runs.push(newRun);
-    runLog[date] = newRun;
-    synced++;
-  }
-
-  if (synced > 0) setStorage(data);
-  localStorage.setItem(lsKey('fitbit_last_sync'), new Date().toISOString());
-
-  if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; }
+function disconnectFitbit() {
+  clearOAuthTokens('fitbit');
   renderSettings();
-  if (synced > 0) { renderDashboard(); renderSchedule(); renderHistory(); }
-  return { synced };
+  renderDevices();
+}
+
+async function syncFitbitRuns({ notify = false } = {}) {
+  setSyncBusy('fitbitSyncBtn', true);
+  let message = '', type = 'info', synced = 0;
+  try {
+    const token = await getValidFitbitToken();
+    if (!token) {
+      message = isFitbitConnected()
+        ? 'Could not reach Fitbit. Check your connection and try again.'
+        : 'Fitbit access has ended. Connect Fitbit again in Settings.';
+      type = 'error';
+      notify = notify || !isFitbitConnected();
+      return { error: 'not_connected' };
+    }
+    const data = getStorage();
+    const plan = data.plans[0];
+    if (!plan) {
+      message = 'Create a training plan first. Fitbit runs are matched to the days in your plan.';
+      return { synced: 0 };
+    }
+
+    // Fitbit pages through results with the pagination.next link. The offset
+    // parameter itself only supports 0.
+    const activities = [];
+    const seen = new Set();
+    let pageUrl = FITBIT_ACTIVITIES_URL + '?' + new URLSearchParams({
+      afterDate: formatDate(addDays(parseDate(plan.startDate), -1)),
+      sort: 'asc', limit: '100', offset: '0',
+    });
+    for (let page = 0; pageUrl && page < 20; page++) {
+      const res = await fetch(pageUrl, { headers: { Authorization: 'Bearer ' + token } });
+      if (res.status === 401) {
+        disconnectFitbit();
+        message = 'Fitbit access has ended. Connect Fitbit again in Settings.';
+        type = 'error';
+        notify = true;
+        return { error: 'unauthorized' };
+      }
+      if (!res.ok) {
+        if (activities.length) break;  // import the pages that did arrive
+        message = res.status === 429
+          ? 'Fitbit is limiting requests right now. Try again in an hour.'
+          : 'Fitbit did not return your activities. Try again later.';
+        type = 'error';
+        return { error: res.status === 429 ? 'rate_limited' : 'fetch_failed' };
+      }
+      const body  = await res.json();
+      const batch = Array.isArray(body.activities) ? body.activities : [];
+      batch.forEach(activity => {
+        if (!seen.has(activity.logId)) { seen.add(activity.logId); activities.push(activity); }
+      });
+      const next = body.pagination && body.pagination.next;
+      pageUrl = batch.length === 100 && typeof next === 'string' && next !== pageUrl &&
+        next.startsWith(FITBIT_ACTIVITIES_URL) ? next : '';
+    }
+
+    const runLog = {};
+    data.runs.forEach(r => { if (r.planId === plan.id) runLog[r.date] = r; });
+
+    for (const activity of activities) {
+      if (!isFitbitRun(activity)) continue;
+      let distance = activity.distance || 0;
+      const unit = (activity.distanceUnit || '').toLowerCase();
+      if (unit === 'kilometer' || unit === 'km') distance *= 0.621371;
+      distance = Math.round(distance * 100) / 100;
+      if (distance < 0.1) continue;
+
+      const changed = mergeDeviceRun({
+        data, plan, runLog, idField: 'fitbitId', id: activity.logId,
+        date: (activity.startTime || '').substring(0, 10),
+        values: {
+          distance,
+          time: Math.round((activity.duration || 0) / 1000),
+          avgHeartRate: activity.averageHeartRate || 0,
+          heartRateZones: activity.heartRateZones || [],
+        },
+        effortSource: 'auto', notes: 'Synced from Fitbit',
+      });
+      if (changed) synced++;
+    }
+
+    if (synced > 0) {
+      setStorage(data);
+      refreshDeviceViews(true);
+    }
+    storageSet(lsKey('fitbit_last_sync'), new Date().toISOString());
+    message = synced
+      ? `Synced ${plural(synced, 'run')} from Fitbit.`
+      : 'Fitbit is up to date. There are no new runs on your plan days.';
+    type = synced ? 'success' : 'info';
+    return { synced };
+  } catch (_) {
+    message = 'Could not reach Fitbit. Check your connection and try again.';
+    type = 'error';
+    return { error: 'network' };
+  } finally {
+    setSyncBusy('fitbitSyncBtn', false);
+    renderSettings();
+    if (message && (notify || synced > 0)) showToast(message, type);
+  }
 }
 
 // ============================================================================
-// WHOOP INTEGRATION
+// WHOOP INTEGRATION (advanced, self-hosted)
 // ============================================================================
+//
+// Whoop issues tokens only when the request includes the app's client secret,
+// which can never be shipped in a static site. Users who want Whoop deploy a
+// small token proxy (sample code on the Devices tab) that adds the secret, and
+// enter its URL in Settings. Everything else talks to Whoop directly.
 
-// ⚠️  Whoop requires a client_secret for token exchange.
-//     For a static site, proxy the token call through a serverless function
-//     (e.g. Cloudflare Worker) that holds the secret. Set WHOOP_TOKEN_PROXY
-//     to your worker URL, e.g. "https://whoop-proxy.yourname.workers.dev/token"
-//     Leave blank to attempt direct token exchange (will fail in production).
-const WHOOP_CLIENT_ID    = 'YOUR_WHOOP_CLIENT_ID';
-const WHOOP_REDIRECT_URI = FITBIT_REDIRECT_URI;
-const WHOOP_TOKEN_PROXY  = ''; // set to your proxy URL
+const WHOOP_AUTHORIZE_URL = 'https://api.prod.whoop.com/oauth/oauth2/auth';
+const WHOOP_API_BASE      = 'https://api.prod.whoop.com/developer/v2';
+const WHOOP_RUNNING_SPORT_ID = 0;  // "Running" in Whoop's sport list
 
 function getWhoopClientId() {
-  return (session && localStorage.getItem(lsKey('whoop_client_id'))) || WHOOP_CLIENT_ID;
+  return readDeviceSetting('whoop_client_id');
 }
-function saveWhoopClientId(id) { localStorage.setItem(lsKey('whoop_client_id'), id.trim()); }
+
 function getWhoopProxyUrl() {
-  return (session && localStorage.getItem(lsKey('whoop_proxy_url'))) || WHOOP_TOKEN_PROXY;
-}
-function saveWhoopProxyUrl(url) { localStorage.setItem(lsKey('whoop_proxy_url'), url.trim()); }
-
-// Whoop sport IDs that are running activities
-const WHOOP_RUN_SPORT_IDS = new Set([0, 71, 126]);  // Running, Trail Run, Treadmill
-
-async function connectWhoop() {
-  const verifier  = await generateCodeVerifier();
-  const challenge = await generateCodeChallenge(verifier);
-  const stateBuf  = new Uint8Array(8);
-  crypto.getRandomValues(stateBuf);
-  const state = 'whoop_' + base64URLEncode(stateBuf);
-
-  localStorage.setItem(lsKey('whoop_pkce_verifier'), verifier);
-  localStorage.setItem(lsKey('whoop_oauth_state'),   state);
-
-  const params = new URLSearchParams({
-    response_type: 'code', client_id: getWhoopClientId(),
-    redirect_uri: WHOOP_REDIRECT_URI,
-    scope: 'read:recovery read:workout offline',
-    code_challenge: challenge, code_challenge_method: 'S256', state,
-  });
-  window.location.href = 'https://api.prod.whoop.com/oauth/oauth2/auth?' + params;
+  return readDeviceSetting('whoop_proxy_url');
 }
 
-async function handleWhoopCallback() {
-  const params = new URLSearchParams(window.location.search);
-  const code   = params.get('code');
-  const state  = params.get('state');
-  if (!code || !state?.startsWith('whoop_')) return false;
-
-  window.history.replaceState({}, '', window.location.pathname);
-
-  const storedState = localStorage.getItem(lsKey('whoop_oauth_state'));
-  const verifier    = localStorage.getItem(lsKey('whoop_pkce_verifier'));
-  localStorage.removeItem(lsKey('whoop_oauth_state'));
-  localStorage.removeItem(lsKey('whoop_pkce_verifier'));
-
-  if (state !== storedState || !verifier) return false;
-
-  const tokenEndpoint = getWhoopProxyUrl() || 'https://api.prod.whoop.com/oauth/oauth2/token';
+function isValidProxyUrl(value) {
   try {
-    const res = await fetch(tokenEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: getWhoopClientId(), grant_type: 'authorization_code',
-        redirect_uri: WHOOP_REDIRECT_URI, code, code_verifier: verifier }),
-    });
-    if (!res.ok) return false;
-    saveWhoopTokens(await res.json());
-    return true;
-  } catch (e) { return false; }
-}
-
-function saveWhoopTokens(tokens) {
-  localStorage.setItem(lsKey('whoop_access_token'),  tokens.access_token);
-  if (tokens.refresh_token) localStorage.setItem(lsKey('whoop_refresh_token'), tokens.refresh_token);
-  localStorage.setItem(lsKey('whoop_token_expires'), Date.now() + (tokens.expires_in || 3600) * 1000);
-}
-
-async function getValidWhoopToken() {
-  const expires = parseInt(localStorage.getItem(lsKey('whoop_token_expires')) || '0');
-  if (Date.now() < expires - 60000) return localStorage.getItem(lsKey('whoop_access_token'));
-
-  const refreshToken = localStorage.getItem(lsKey('whoop_refresh_token'));
-  if (!refreshToken) { disconnectWhoop(); return null; }
-
-  const tokenEndpoint = getWhoopProxyUrl() || 'https://api.prod.whoop.com/oauth/oauth2/token';
-  try {
-    const res = await fetch(tokenEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ client_id: getWhoopClientId(), grant_type: 'refresh_token', refresh_token: refreshToken }),
-    });
-    if (!res.ok) { disconnectWhoop(); return null; }
-    const tokens = await res.json();
-    saveWhoopTokens(tokens);
-    return tokens.access_token;
-  } catch (e) { return null; }
+    const url = new URL(value);
+    if (url.protocol === 'https:') return true;
+    return url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1');
+  } catch (_) {
+    return false;
+  }
 }
 
 function isWhoopConnected() {
-  return !!(session && localStorage.getItem(lsKey('whoop_access_token')));
+  return !!(session && storageGet(lsKey('whoop_access_token')));
+}
+
+async function connectWhoop() {
+  const idInput    = document.getElementById('whoopClientIdInput');
+  const proxyInput = document.getElementById('whoopProxyInput');
+  if (idInput)    saveDeviceSetting('whoop_client_id', idInput.value);
+  if (proxyInput) saveDeviceSetting('whoop_proxy_url', proxyInput.value);
+  if (!getWhoopClientId()) {
+    showToast('Enter the Client ID of your Whoop app first.', 'error');
+    if (idInput) idInput.focus();
+    return;
+  }
+  if (!isValidProxyUrl(getWhoopProxyUrl())) {
+    showToast('Enter the https address of your Whoop token proxy, for example https://your-proxy.example.com/token.', 'error', 7000);
+    if (proxyInput) proxyInput.focus();
+    return;
+  }
+  await startOAuth('whoop', WHOOP_AUTHORIZE_URL, {
+    client_id: getWhoopClientId(),
+    scope: 'read:recovery read:workout offline',
+  });
+}
+
+function requestWhoopToken(params) {
+  return fetch(getWhoopProxyUrl(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: getWhoopClientId(), ...params }),
+  });
+}
+
+async function handleWhoopCallback() {
+  const callback = readOAuthCallback('whoop');
+  if (!callback) return null;
+  if (callback.error) {
+    showToast(callback.error === 'access_denied'
+      ? 'Whoop was not connected because access was not approved.'
+      : 'Whoop could not be connected. Please try again.', 'error', 7000);
+    return false;
+  }
+  if (!isValidProxyUrl(getWhoopProxyUrl())) {
+    showToast('Whoop needs your token proxy URL. Add it under Settings, Whoop, and connect again.', 'error', 7000);
+    return false;
+  }
+  try {
+    const res = await requestWhoopToken({
+      grant_type: 'authorization_code', redirect_uri: OAUTH_REDIRECT_URI,
+      code: callback.code, code_verifier: callback.verifier,
+    });
+    if (!res.ok) {
+      showToast('Whoop did not accept the connection. Check the Client ID, the Redirect URI and the secrets in your token proxy.', 'error', 9000);
+      return false;
+    }
+    saveOAuthTokens('whoop', await res.json(), 3600);
+    showToast('Whoop connected.', 'success');
+    return true;
+  } catch (_) {
+    showToast('Could not reach your Whoop token proxy. Check its URL and that ALLOWED_ORIGIN matches this site.', 'error', 9000);
+    return false;
+  }
+}
+
+async function getValidWhoopToken() {
+  if (hasFreshToken('whoop')) return storageGet(lsKey('whoop_access_token'));
+  const refreshToken = storageGet(lsKey('whoop_refresh_token'));
+  if (!refreshToken || !isValidProxyUrl(getWhoopProxyUrl())) { disconnectWhoop(); return null; }
+  try {
+    const res = await requestWhoopToken({ grant_type: 'refresh_token', refresh_token: refreshToken, scope: 'offline' });
+    if (res.status === 400 || res.status === 401) { disconnectWhoop(); return null; }
+    if (!res.ok) return null;
+    const tokens = await res.json();
+    saveOAuthTokens('whoop', tokens, 3600);
+    return tokens.access_token;
+  } catch (_) { return null; }
 }
 
 function disconnectWhoop() {
-  ['whoop_access_token', 'whoop_refresh_token', 'whoop_token_expires', 'whoop_last_sync']
-    .forEach(k => localStorage.removeItem(lsKey(k)));
+  clearOAuthTokens('whoop');
   appData.whoopRecovery = null;
   renderSettings();
-  renderDashboard();
+  renderDevices();
+  refreshDeviceViews(false);
 }
 
-// Fetch latest recovery score (last 24h) and update dashboard
-async function syncWhoopRecovery() {
-  const token = await getValidWhoopToken();
-  if (!token) return;
-
-  try {
-    const end   = new Date();
-    const start = new Date(end - 48 * 3600 * 1000); // look back 48h for latest record
-    const url   = new URL('https://api.prod.whoop.com/developer/v1/recovery');
-    url.searchParams.set('start', start.toISOString());
-    url.searchParams.set('end',   end.toISOString());
-    url.searchParams.set('limit', '5');
-
-    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return;
-    const json    = await res.json();
-    const records = (json.records || []).filter(r => r.score_state === 'SCORED');
-    if (!records.length) return;
-
-    const latest = records[0].score;
-    appData.whoopRecovery = {
-      recoveryScore: Math.round(latest.recovery_score || 0),
-      hrv:  latest.hrv_rmssd_milli || 0,
-      rhr:  Math.round(latest.resting_heart_rate || 0),
-      fetchedAt: new Date().toISOString()
-    };
-    localStorage.setItem(lsKey('whoop_last_sync'), new Date().toISOString());
-    renderDashboard();
-    renderSettings();
-  } catch (e) { /* silent fail */ }
+async function whoopGet(path, params, token) {
+  const url = new URL(WHOOP_API_BASE + path);
+  Object.entries(params).forEach(([key, value]) => { if (value) url.searchParams.set(key, value); });
+  const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+  if (!res.ok) {
+    const error = new Error(`Whoop request failed (${res.status})`);
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
 }
 
-// Sync Whoop workouts as run logs (mirrors syncFitbitRuns)
-async function syncWhoopRuns() {
-  const token = await getValidWhoopToken();
-  if (!token) return { error: 'not_connected' };
+// Calendar date of a workout in the time zone where it was recorded.
+function whoopWorkoutDate(workout) {
+  const start = new Date(workout.start);
+  if (isNaN(start)) return null;
+  const match = /^([+-])(\d{2}):(\d{2})$/.exec(workout.timezone_offset || '');
+  if (!match) return formatDate(start);
+  const offsetMin = (match[1] === '-' ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3]));
+  return new Date(start.getTime() + offsetMin * 60000).toISOString().slice(0, 10);
+}
 
+function isWhoopRun(workout) {
+  if (workout.sport_name) return /run/i.test(workout.sport_name);
+  return workout.sport_id === WHOOP_RUNNING_SPORT_ID;
+}
+
+// Latest scored recovery from the last two days, shown on the dashboard.
+async function syncWhoopRecovery(token) {
+  const end   = new Date();
+  const start = new Date(end.getTime() - 48 * 3600 * 1000);
+  const json  = await whoopGet('/recovery', { start: start.toISOString(), end: end.toISOString(), limit: '5' }, token);
+  const latest = (json.records || []).find(r => r.score_state === 'SCORED' && r.score);
+  if (!latest) return;
+  appData.whoopRecovery = {
+    recoveryScore: Math.round(latest.score.recovery_score || 0),
+    hrv: latest.score.hrv_rmssd_milli || 0,
+    rhr: Math.round(latest.score.resting_heart_rate || 0),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+// Import Whoop running workouts on plan days as logged runs.
+async function syncWhoopRuns(token) {
   const data = getStorage();
-  if (!data.plans.length) return { synced: 0 };
   const plan = data.plans[0];
+  if (!plan) return 0;
 
-  let allWorkouts = [], nextToken = null;
-  try {
-    do {
-      const url = new URL('https://api.prod.whoop.com/developer/v1/activity/workout');
-      url.searchParams.set('start', plan.startDate + 'T00:00:00.000Z');
-      url.searchParams.set('limit', '25');
-      if (nextToken) url.searchParams.set('nextToken', nextToken);
+  const workouts = [];
+  let nextToken = '';
+  for (let page = 0; page < 40; page++) {
+    const json = await whoopGet('/activity/workout', {
+      start: parseDate(plan.startDate).toISOString(), limit: '25', nextToken,
+    }, token);
+    workouts.push(...(json.records || []));
+    nextToken = json.next_token || '';
+    if (!nextToken) break;
+  }
 
-      const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) break;
-      const json = await res.json();
-      allWorkouts.push(...(json.records || []));
-      nextToken = json.next_token || null;
-    } while (nextToken);
-  } catch (e) { return { error: 'fetch_failed' }; }
-
-  const runWorkouts = allWorkouts.filter(w => WHOOP_RUN_SPORT_IDS.has(w.sport_id) && w.score_state === 'SCORED');
   const runLog = {};
   data.runs.forEach(r => { if (r.planId === plan.id) runLog[r.date] = r; });
 
   let synced = 0;
-  for (const workout of runWorkouts) {
-    const date = workout.start.substring(0, 10);
-    const score = workout.score;
+  for (const workout of workouts) {
+    if (workout.score_state !== 'SCORED' || !workout.score || !isWhoopRun(workout)) continue;
+    const date     = whoopWorkoutDate(workout);
+    const score    = workout.score;
+    const distance = Math.round((score.distance_meter || 0) / 1609.344 * 100) / 100;
+    if (!date || distance < 0.1) continue;
 
-    let distanceMiles = (score.distance_meter || 0) / 1609.344;
-    distanceMiles = Math.round(distanceMiles * 100) / 100;
-    if (distanceMiles < 0.1) continue;
-
-    const durationSec  = Math.round((new Date(workout.end) - new Date(workout.start)) / 1000);
-    const avgHeartRate = score.average_heart_rate || 0;
-    const whoopZones   = score.zone_duration || {};
-
-    let plannedRun = null;
-    for (const week of plan.weeks) {
-      const found = week.runs.find(r => r.date === date);
-      if (found) { plannedRun = found; break; }
-    }
-    if (!plannedRun) continue;
-
-    if (runLog[date]) {
-      // Only update if this entry was originally synced from Whoop
-      if (runLog[date].whoopWorkoutId && !runLog[date].fitbitId) {
-        runLog[date].distance     = distanceMiles;
-        runLog[date].time         = durationSec;
-        runLog[date].avgHeartRate = avgHeartRate;
-        runLog[date].whoopZones   = whoopZones;
-        if (runLog[date].effortSource !== 'manual') {
-          const autoEffort = calculateAutoEffort(runLog[date], data.runs);
-          if (autoEffort) { runLog[date].effort = autoEffort; runLog[date].effortSource = 'whoop'; }
-        }
-        synced++;
-      }
-      continue;
-    }
-
-    const newRun = {
-      id: generateUUID(), planId: plan.id, date, type: plannedRun.type,
-      distance: distanceMiles, time: durationSec,
-      avgHeartRate, whoopZones,
-      effort: 0, effortSource: 'none',
-      notes: 'Synced from Whoop', whoopWorkoutId: workout.id,
-    };
-    const autoEffort = calculateAutoEffort(newRun, data.runs);
-    if (autoEffort) { newRun.effort = autoEffort; newRun.effortSource = 'whoop'; }
-    data.runs.push(newRun);
-    runLog[date] = newRun;
-    synced++;
+    const changed = mergeDeviceRun({
+      data, plan, runLog, idField: 'whoopWorkoutId', id: workout.id, date,
+      values: {
+        distance,
+        time: Math.max(0, Math.round((new Date(workout.end) - new Date(workout.start)) / 1000)) || 0,
+        avgHeartRate: score.average_heart_rate || 0,
+        whoopZones: score.zone_durations || score.zone_duration || {},
+      },
+      effortSource: 'whoop', notes: 'Synced from Whoop',
+    });
+    if (changed) synced++;
   }
 
   if (synced > 0) setStorage(data);
-  return { synced };
+  return synced;
 }
 
-// Trigger both recovery and run sync
-async function syncWhoopData() {
-  const btn = document.getElementById('whoopSyncBtn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
-
-  await syncWhoopRecovery();
-  const { synced } = await syncWhoopRuns();
-
-  localStorage.setItem(lsKey('whoop_last_sync'), new Date().toISOString());
-  if (btn) { btn.disabled = false; btn.textContent = 'Sync Now'; }
-  renderSettings();
-  if (synced > 0) { renderDashboard(); renderSchedule(); renderHistory(); }
+async function syncWhoopData({ notify = false } = {}) {
+  setSyncBusy('whoopSyncBtn', true);
+  let message = '', type = 'info', synced = 0;
+  try {
+    const token = await getValidWhoopToken();
+    if (!token) {
+      message = isWhoopConnected()
+        ? 'Could not reach Whoop. Check your connection and try again.'
+        : 'Whoop access has ended. Connect Whoop again in Settings.';
+      type = 'error';
+      notify = notify || !isWhoopConnected();
+      return;
+    }
+    await syncWhoopRecovery(token);
+    synced = await syncWhoopRuns(token);
+    storageSet(lsKey('whoop_last_sync'), new Date().toISOString());
+    message = synced ? `Synced ${plural(synced, 'run')} from Whoop.` : 'Whoop is up to date.';
+    type = synced ? 'success' : 'info';
+  } catch (error) {
+    type = 'error';
+    if (error.status === 401) {
+      disconnectWhoop();
+      message = 'Whoop access has ended. Connect Whoop again in Settings.';
+      notify = true;
+    } else if (error.status === 429) {
+      message = 'Whoop is limiting requests right now. Try again in a few minutes.';
+    } else {
+      message = 'Could not sync with Whoop right now. Try again later.';
+    }
+  } finally {
+    setSyncBusy('whoopSyncBtn', false);
+    renderSettings();
+    refreshDeviceViews(synced > 0);
+    if (message && (notify || synced > 0)) showToast(message, type);
+  }
 }
 
 // ============================================================================
-// DEVICES — setup guides
+// DEVICES (setup guides)
 // ============================================================================
+
+const WHOOP_PROXY_SAMPLE = `// Whoop token proxy, written for Cloudflare Workers.
+// Secrets:  WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET
+// Variable: ALLOWED_ORIGIN, the origin of your RunTrack site,
+//           for example https://your-name.github.io
+export default {
+  async fetch(request, env) {
+    const cors = {
+      'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN,
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Vary': 'Origin',
+    };
+    if (request.headers.get('Origin') !== env.ALLOWED_ORIGIN) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
+    if (request.method !== 'POST') {
+      return new Response('Method not allowed', { status: 405, headers: cors });
+    }
+
+    const incoming = new URLSearchParams(await request.text());
+    const grant = incoming.get('grant_type');
+    if (grant !== 'authorization_code' && grant !== 'refresh_token') {
+      return new Response('Unsupported grant type', { status: 400, headers: cors });
+    }
+    const params = new URLSearchParams();
+    for (const key of ['grant_type', 'code', 'code_verifier', 'redirect_uri', 'refresh_token', 'scope']) {
+      if (incoming.has(key)) params.set(key, incoming.get(key));
+    }
+    params.set('client_id', env.WHOOP_CLIENT_ID);
+    params.set('client_secret', env.WHOOP_CLIENT_SECRET);
+
+    const res = await fetch('https://api.prod.whoop.com/oauth/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
+    });
+    return new Response(await res.text(), {
+      status: res.status,
+      headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+  },
+};`;
 
 function renderDevices() {
-  const iconWatch = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="3"/><path d="M11 8h2M11 12h2M11 16h2"/></svg>`;
-  const iconPulse = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`;
-  const iconRing  = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/></svg>`;
-  const iconCompass = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>`;
-  const iconApple = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="5" width="10" height="14" rx="3"/><path d="M7 9H5M7 15H5M17 9h2M17 15h2"/></svg>`;
+  const container = document.getElementById('devicesContent');
+  if (!container) return;
+
+  const iconWatch = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="3"/><path d="M11 8h2M11 12h2M11 16h2"/></svg>`;
+  const iconPulse = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`;
+  const origin    = escapeHtml(window.location.origin);
 
   const devices = [
     {
       id: 'fitbit',
       name: 'Fitbit',
       icon: iconWatch,
-      tagline: 'Sync runs and heart rate zones automatically',
+      tagline: 'Import runs with distance, time, average heart rate and heart rate zones',
       connected: isFitbitConnected(),
       steps: [
-        { title: 'Create a Fitbit developer app', body: `Go to <strong>dev.fitbit.com</strong> → Log In → <em>Register an App</em>.<br>Fill in:<ul><li><strong>Application Name:</strong> RunTrack (or any name)</li><li><strong>OAuth 2.0 Application Type:</strong> Personal</li><li><strong>Callback URL:</strong> <code>${location.origin}${location.pathname}</code></li><li><strong>Default Access Type:</strong> Read-Only</li></ul>Click Save. You'll see your <strong>OAuth 2.0 Client ID</strong>.` },
-        { title: 'Enter your Client ID in RunTrack', body: 'Go to <strong>Settings → Fitbit</strong> and paste your Client ID into the field, then click <strong>Connect Fitbit</strong>. No code changes needed.' },
-        { title: 'Approve and sync', body: 'You\'ll be redirected to Fitbit to approve access, then returned to RunTrack. Hit <strong>Sync Now</strong> to import all runs. Future syncs happen automatically on each app load.' },
+        {
+          title: 'Register a Fitbit app',
+          body: `Sign in at <a href="https://dev.fitbit.com/apps/new" target="_blank" rel="noopener noreferrer">dev.fitbit.com</a> and choose <em>Register an App</em>. Any name and website will do. Then set:
+            <ul>
+              <li><strong>OAuth 2.0 Application Type:</strong> Personal</li>
+              <li><strong>Callback URL:</strong> exactly ${redirectUriMarkup()}</li>
+              <li><strong>Default Access Type:</strong> Read Only</li>
+            </ul>
+            A Personal app can only read the Fitbit account that registered it, so everyone uses their own app.`,
+        },
+        {
+          title: 'Connect RunTrack',
+          body: 'Copy the <strong>OAuth 2.0 Client ID</strong> from your app\'s page, paste it under <strong>Settings, Fitbit</strong> and choose <strong>Connect Fitbit</strong>. Approve access on Fitbit and you come straight back here.',
+          action: `<button type="button" class="btn btn-secondary btn-sm" onclick="openDeviceSettings('fitbit')">Open Fitbit settings</button>`,
+        },
+        {
+          title: 'Sync your runs',
+          body: 'RunTrack imports Fitbit runs that fall on your plan days and syncs again each time you open the app. You can also choose <strong>Sync now</strong> in Settings.',
+        },
       ],
-      notes: 'Fitbit uses pure PKCE OAuth — no server or client secret needed. Safe for a public static site.'
+      notes: 'Fitbit uses OAuth 2.0 with PKCE, so no client secret or server is involved. Your Fitbit tokens are stored only in this browser.',
+      warning: 'Google is shutting down the Fitbit Web API on October 30, 2026 and no longer accepts new Fitbit developer apps. If you already have one, you can use it until then.',
     },
     {
       id: 'whoop',
       name: 'Whoop',
+      badge: 'Advanced, self-hosted',
       icon: iconPulse,
-      tagline: 'Recovery score, HRV, resting HR and run import',
+      tagline: 'Recovery, HRV and resting heart rate on your dashboard, plus run import',
       connected: isWhoopConnected(),
       steps: [
-        { title: 'Join the Whoop Developer Program', body: 'Go to <strong>developer.whoop.com</strong> → <em>Get Access</em>. Fill out the form — personal use approval usually takes 1–2 days.' },
-        { title: 'Create an app', body: `Once approved, create an app in the portal.<br>Set the <strong>Redirect URI</strong> to: <code>${location.origin}${location.pathname}</code><br>Request scopes: <code>read:recovery read:workout offline</code>.<br>Note your <strong>Client ID</strong> and <strong>Client Secret</strong>.` },
-        { title: 'Deploy a token proxy', body: 'Whoop requires a client secret for token exchange, which cannot be stored in a public website. Create a free Cloudflare Worker:<ol><li>Go to <strong>dash.cloudflare.com</strong> → Workers → Create Worker</li><li>Paste the proxy code below into the editor and deploy</li><li>In the Worker settings, add environment variables: <code>WHOOP_CLIENT_ID</code> and <code>WHOOP_CLIENT_SECRET</code> (mark as encrypted)</li><li>Copy the Worker URL (e.g. <code>https://whoop-proxy.you.workers.dev</code>)</li></ol>' },
-        { title: 'Connect in Settings', body: 'Go to <strong>Settings → Whoop</strong>, enter your Client ID and the Worker URL as the Proxy URL, then click <strong>Connect Whoop</strong>.' },
+        {
+          title: 'Create a Whoop developer app',
+          body: `Sign in to the <a href="https://developer-dashboard.whoop.com" target="_blank" rel="noopener noreferrer">Whoop Developer Dashboard</a> with your Whoop account and create an app. Then set:
+            <ul>
+              <li><strong>Redirect URI:</strong> exactly ${redirectUriMarkup()}</li>
+              <li><strong>Scopes:</strong> <code>read:recovery</code>, <code>read:workout</code> and <code>offline</code></li>
+            </ul>
+            Keep the Client ID and Client Secret for the next steps.`,
+        },
+        {
+          title: 'Host a token proxy',
+          body: `Whoop only issues tokens when the request includes your client secret, and a secret must never be put in a website. Deploy the small proxy below on a serverless platform you control. Store <code>WHOOP_CLIENT_ID</code> and <code>WHOOP_CLIENT_SECRET</code> as secrets and set <code>ALLOWED_ORIGIN</code> to <code>${origin}</code>.`,
+        },
+        {
+          title: 'Connect RunTrack',
+          body: 'Under <strong>Settings, Whoop</strong>, enter your Client ID and the proxy address, for example <code>https://your-proxy.example.com/token</code>, then choose <strong>Connect Whoop</strong>.',
+          action: `<button type="button" class="btn btn-secondary btn-sm" onclick="openDeviceSettings('whoop')">Open Whoop settings</button>`,
+        },
       ],
-      notes: 'Your Client Secret is never stored in RunTrack — it lives only in your Cloudflare Worker environment variables.',
-      proxyCode: `// Cloudflare Worker — Whoop token proxy
-// Set env vars: WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET
-export default {
-  async fetch(request, env) {
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' } });
-    }
-    if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
-    const body = await request.text();
-    const params = new URLSearchParams(body);
-    params.set('client_id', env.WHOOP_CLIENT_ID);
-    params.set('client_secret', env.WHOOP_CLIENT_SECRET);
-    const res = await fetch('https://api.prod.whoop.com/oauth/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params.toString()
-    });
-    return new Response(await res.text(), {
-      status: res.status,
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-    });
-  }
-};`
+      proxyCode: WHOOP_PROXY_SAMPLE,
+      notes: 'Your client secret stays in your proxy. RunTrack sends it only the authorization code or refresh token, and the proxy forwards them to Whoop with the secret. Whoop tokens are stored only in this browser.',
     },
-    {
-      id: 'oura',
-      name: 'Oura Ring',
-      icon: iconRing,
-      tagline: 'Sleep, readiness score and activity data',
-      connected: false,
-      comingSoon: true,
-      steps: [
-        { title: 'Get an Oura API token', body: 'Go to <strong>cloud.ouraring.com/user/api-tokens</strong> → Create New Token. Copy the Personal Access Token.' },
-        { title: 'Integration coming soon', body: 'RunTrack will support Oura readiness scores and sleep data on the dashboard. The Oura v2 API uses simple bearer tokens — no OAuth needed.' },
-      ],
-      notes: 'Oura uses Personal Access Tokens. Integration is planned for a future release.'
-    },
-    {
-      id: 'garmin',
-      name: 'Garmin',
-      icon: iconCompass,
-      tagline: 'Import runs from Garmin Connect',
-      connected: false,
-      comingSoon: true,
-      steps: [
-        { title: 'Garmin developer access', body: 'Garmin\'s API (<strong>developer.garmin.com/gc-developer-program</strong>) requires applying for the Health API program. Approval is needed before you can create an OAuth app.' },
-        { title: 'Alternative: export from Garmin Connect', body: 'Export your activities from <strong>Garmin Connect → Activities → Export CSV</strong> and import via <strong>Settings → Import JSON</strong> after formatting.' },
-      ],
-      notes: 'Garmin\'s Health API approval can take weeks. Native integration is planned for a future release.'
-    },
-    {
-      id: 'apple',
-      name: 'Apple Watch',
-      icon: iconApple,
-      tagline: 'Import workouts from Apple Health',
-      connected: false,
-      comingSoon: true,
-      steps: [
-        { title: 'Export from Apple Health', body: 'On your iPhone: <strong>Health app → profile icon → Export All Health Data</strong>. This creates a ZIP with an XML file of all workouts.' },
-        { title: 'Web limitation', body: 'Apple Health is locked to native iOS apps. The best approach is a companion iOS shortcut or a third-party bridge like <strong>Health Auto Export</strong> (App Store) that can POST workouts to a webhook.' },
-      ],
-      notes: 'Full Apple Watch support requires a native iOS app or a third-party bridge. Web import is planned.'
-    }
   ];
 
-  let html = `<p class="devices-intro">Set up your wearable to automatically sync runs and health metrics into RunTrack.</p>`;
+  let html = `<p class="devices-intro">Connecting a device is optional. RunTrack talks to Fitbit and Whoop straight from your browser through a developer app that you register yourself, and keeps the access tokens in this browser only.</p>`;
 
   for (const device of devices) {
-    const statusBadge = device.connected
-      ? `<span class="device-badge-connected">Connected</span>`
-      : device.comingSoon
-        ? `<span class="device-badge-soon">Coming soon</span>`
-        : '';
+    const badges = [
+      device.connected ? '<span class="device-badge-connected">Connected</span>' : '',
+      device.badge ? `<span class="badge-muted">${device.badge}</span>` : '',
+    ].join('');
 
     html += `
     <div class="device-card" id="device-${device.id}">
       <div class="device-card-header">
         <span class="device-icon">${device.icon}</span>
         <div class="device-card-info">
-          <div class="device-card-name">${device.name} ${statusBadge}</div>
+          <div class="device-card-name">${device.name} ${badges}</div>
           <div class="device-card-tagline">${device.tagline}</div>
         </div>
-        ${device.connected ? `<button class="btn btn-secondary btn-sm" onclick="switchTab('settings')">Manage</button>` : ''}
+        ${device.connected ? `<button class="btn btn-secondary btn-sm" onclick="openDeviceSettings('${device.id}')">Manage</button>` : ''}
       </div>
       <div class="device-card-body">`;
 
@@ -3104,6 +3298,7 @@ export default {
           <div>
             <div class="device-step-title">${step.title}</div>
             <div class="device-step-body">${step.body}</div>
+            ${step.action ? `<div class="device-step-action">${step.action}</div>` : ''}
           </div>
         </div>`;
     });
@@ -3111,19 +3306,18 @@ export default {
     if (device.proxyCode) {
       html += `
         <details class="device-proxy-details">
-          <summary>Show Cloudflare Worker proxy code</summary>
-          <pre class="code-block">${device.proxyCode.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>
+          <summary>Show the token proxy code</summary>
+          <pre class="code-block">${escapeHtml(device.proxyCode)}</pre>
         </details>`;
     }
-
-    if (device.notes) {
-      html += `<div class="device-note">${device.notes}</div>`;
-    }
-
+    if (device.notes)   html += `<div class="device-note">${device.notes}</div>`;
+    if (device.warning) html += `<div class="device-note device-note-warning">${device.warning}</div>`;
     html += `</div></div>`;
   }
 
-  document.getElementById('devicesContent').innerHTML = html;
+  html += `<p class="devices-other">Using Garmin, Apple Watch or another device? Log runs by hand with the <strong>Log a run</strong> button. To move your data between browsers, use <strong>Export JSON</strong> and <strong>Import JSON</strong> in Settings.</p>`;
+
+  container.innerHTML = html;
 }
 
 // ============================================================================
