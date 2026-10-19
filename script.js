@@ -1166,6 +1166,14 @@ function renderOnboarding() {
   });
 }
 
+// Every run logged for a plan during one of its weeks, including runs on days
+// without a planned run. Mileage counts these; completion only counts runs on
+// planned days.
+function runsLoggedInWeek(planRuns, week) {
+  const end = formatDate(addDays(parseDate(week.startDate), 6));
+  return planRuns.filter(run => run.date >= week.startDate && run.date <= end);
+}
+
 function renderDashboard() {
   const data = getStorage();
   updatePlanChrome();
@@ -1179,8 +1187,9 @@ function renderDashboard() {
   const todayStr   = formatDate(today);
   const daysToRace = daysBetween(todayStr, activePlan.raceDate);
 
-  const runLog = {};
-  data.runs.forEach(run => { if (run.planId === activePlan.id) runLog[run.date] = run; });
+  const planRuns = data.runs.filter(run => run.planId === activePlan.id);
+  const runLog   = {};
+  planRuns.forEach(run => { runLog[run.date] = run; });
 
   let totalActualMiles = 0, totalPlannedMiles = 0, totalActualTime = 0;
   let completedRuns = 0, totalRuns = 0;
@@ -1189,8 +1198,12 @@ function renderDashboard() {
   const weeklyMileage = [];
 
   for (const week of activePlan.weeks) {
-    let weekPlanned = 0, weekActual = 0;
+    let weekPlanned = 0;
     const weekHasStarted = parseDate(week.startDate) <= today;
+    const weekLogged = weekHasStarted ? runsLoggedInWeek(planRuns, week) : [];
+    const weekActual = weekLogged.reduce((sum, run) => sum + run.distance, 0);
+    totalActualMiles += weekActual;
+    totalActualTime  += weekLogged.reduce((sum, run) => sum + run.time, 0);
 
     for (const run of week.runs) {
       const runDate = parseDate(run.date);
@@ -1201,10 +1214,6 @@ function renderDashboard() {
         if (runDate <= today) totalPlannedMiles += run.plannedDistance;
 
         if (runLog[run.date]) {
-          const logged = runLog[run.date];
-          totalActualMiles += logged.distance;
-          totalActualTime  += logged.time;
-          weekActual       += logged.distance;
           completedRuns++;
           currentStreak++;
           longestStreak = Math.max(longestStreak, currentStreak);
@@ -1236,15 +1245,13 @@ function renderDashboard() {
     return ws <= today && today <= we;
   });
 
-  let thisWeekPlanned = 0, thisWeekActual = 0, thisWeekDone = 0, thisWeekTotal = 0;
+  let thisWeekPlanned = 0, thisWeekDone = 0, thisWeekTotal = 0;
+  const thisWeekActual = currentWeek ? runsLoggedInWeek(planRuns, currentWeek).reduce((sum, run) => sum + run.distance, 0) : 0;
   if (currentWeek) {
     for (const run of currentWeek.runs) {
       thisWeekPlanned += run.plannedDistance;
       thisWeekTotal++;
-      if (runLog[run.date]) {
-        thisWeekActual += runLog[run.date].distance;
-        thisWeekDone++;
-      }
+      if (runLog[run.date]) thisWeekDone++;
     }
   }
 
@@ -1483,8 +1490,9 @@ function renderSchedule() {
 
   const activePlan = data.plans[0];
   const today      = getToday();
+  const planRuns   = data.runs.filter(run => run.planId === activePlan.id);
   const runLog     = {};
-  data.runs.forEach(run => { if (run.planId === activePlan.id) runLog[run.date] = run; });
+  planRuns.forEach(run => { runLog[run.date] = run; });
 
   let html = '';
 
@@ -1492,13 +1500,9 @@ function renderSchedule() {
     const weekStart = parseDate(week.startDate);
     const weekEnd   = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 6);
 
-    let weekMiles = 0, completedMiles = 0;
+    const weekMiles      = week.runs.reduce((sum, run) => sum + run.plannedDistance, 0);
+    const completedMiles = runsLoggedInWeek(planRuns, week).reduce((sum, run) => sum + run.distance, 0);
     const badges = [];
-
-    for (const run of week.runs) {
-      weekMiles += run.plannedDistance;
-      if (runLog[run.date]) completedMiles += runLog[run.date].distance;
-    }
 
     const isCurrentWeek = weekStart <= today && today <= weekEnd;
     const allLogged     = week.runs.length > 0 && week.runs.every(r => runLog[r.date]);
