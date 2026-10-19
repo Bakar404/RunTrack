@@ -52,6 +52,8 @@ html.light-mode {
 /* ============================================================
    Reset
    ============================================================ */
+[hidden] { display: none !important; }
+
 *, *::before, *::after {
   margin: 0;
   padding: 0;
@@ -75,6 +77,50 @@ body {
   min-height: 100%;
   min-height: 100dvh;
   overflow-x: hidden;
+}
+
+/* ============================================================
+   Boot splash and no-script notice
+   ============================================================ */
+.boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+}
+
+.boot-splash img { animation: splashPulse 1.4s ease-in-out infinite; }
+
+.boot-splash-text {
+  font-size: 13px;
+  color: var(--text2);
+}
+
+@keyframes splashPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.94); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-splash img { animation: none; }
+}
+
+.noscript {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xl);
+  text-align: center;
+  background: var(--bg);
+  color: var(--text);
 }
 
 /* ============================================================
@@ -144,8 +190,8 @@ body {
   font-size: 16px;
   color: var(--text2);
   line-height: 1.6;
-  max-width: 380px;
-  margin-bottom: 44px;
+  max-width: 400px;
+  margin-bottom: 32px;
 }
 
 .landing-features {
@@ -184,28 +230,11 @@ body {
   overflow-y: auto;
 }
 
-.auth-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: var(--spacing-xl);
-}
-
-.auth-logo span {
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: -0.5px;
-  background: linear-gradient(135deg, var(--accent), var(--accent2));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
 .auth-title {
   font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.5px;
-  margin-bottom: var(--spacing-xl);
+  margin-bottom: var(--spacing-sm);
 }
 
 .auth-error {
@@ -222,16 +251,56 @@ body {
   margin-top: var(--spacing-lg);
 }
 
-.auth-switch a {
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 600;
-}
-
 .btn-full {
   width: 100%;
   justify-content: center;
 }
+
+/* ---- Guest start and account copy ---- */
+.landing-cta {
+  margin-bottom: 40px;
+  max-width: 400px;
+}
+
+.btn-lg {
+  padding: 14px 28px;
+  font-size: 16px;
+  border-radius: var(--radius-md);
+}
+
+.landing-cta-note {
+  font-size: 13px;
+  color: var(--text2);
+  margin-top: var(--spacing-sm);
+}
+
+.auth-lead {
+  font-size: 14px;
+  color: var(--text2);
+  line-height: 1.55;
+  margin-bottom: var(--spacing-lg);
+}
+
+.auth-fineprint {
+  font-size: 12px;
+  color: var(--text2);
+  line-height: 1.55;
+  margin-top: var(--spacing-xl);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--border);
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.link-button:hover { text-decoration: underline; }
 
 /* ---- Mobile: stack vertically ---- */
 @media (max-width: 768px) {
@@ -250,7 +319,17 @@ body {
   }
 
   .landing-sub {
-    margin-bottom: 28px;
+    margin-bottom: 24px;
+  }
+
+  .landing-cta {
+    margin-bottom: 32px;
+    max-width: none;
+  }
+
+  .landing-cta .btn-lg {
+    width: 100%;
+    justify-content: center;
   }
 
   .landing-features {
@@ -300,6 +379,18 @@ body {
 .btn-icon:hover {
   background: var(--bg3);
   color: var(--text);
+}
+
+.session-chip {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text2);
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
 }
 
 /* Sidebar user info */
@@ -363,18 +454,6 @@ body {
   flex-shrink: 0;
 }
 
-.sidebar-toggle {
-  display: none;
-  background: none;
-  border: none;
-  color: var(--text2);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  transition: var(--transition);
-}
-
 .sidebar-collapse-btn {
   background: none;
   border: none;
@@ -390,8 +469,7 @@ body {
   justify-content: center;
 }
 
-.sidebar-collapse-btn:hover,
-.sidebar-toggle:hover {
+.sidebar-collapse-btn:hover {
   background: var(--bg3);
   color: var(--text);
 }
@@ -463,18 +541,6 @@ html.light-mode .top-header {
   background: rgba(255,255,255,0.85);
 }
 
-.menu-toggle {
-  display: none;
-  background: none;
-  border: none;
-  color: var(--text);
-  font-size: 22px;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  line-height: 1;
-}
-
 .header-info {
   flex: 1;
   display: flex;
@@ -482,8 +548,6 @@ html.light-mode .top-header {
   align-items: center;
   font-size: 14px;
 }
-
-.header-spacer { width: 40px; }
 
 /* ============================================================
    Container & Views
@@ -1171,6 +1235,10 @@ textarea.form-input {
   padding-top: var(--spacing-sm);
 }
 
+.settings-row-actions + .settings-row {
+  margin-top: var(--spacing-md);
+}
+
 .settings-inline-input {
   padding: 5px 10px;
   background: var(--bg3);
@@ -1659,6 +1727,16 @@ body:not(.has-plan) .fab { display: none; }
   margin-bottom: var(--spacing-xl);
 }
 
+.chart-unavailable {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text2);
+}
+
 .dash-section { margin-bottom: var(--spacing-xl); }
 
 .dash-section-title {
@@ -1919,9 +1997,6 @@ details summary::-webkit-details-marker { display: none; }
   .sidebar-collapse-btn { display: none; }
   .main-content { margin-left: 0; }
 
-  /* Hide desktop header toggle (sidebar is gone) */
-  .menu-toggle { display: none; }
-
   /* Compact header */
   .top-header {
     padding: 12px var(--spacing-md);
@@ -1929,7 +2004,7 @@ details summary::-webkit-details-marker { display: none; }
   }
 
   .header-info { gap: var(--spacing-md); flex-wrap: wrap; font-size: 13px; }
-  .header-spacer { display: none; }
+  .hide-on-phone { display: none; }
 
   /* Content area: bottom padding for tab bar + FAB */
   .container {
