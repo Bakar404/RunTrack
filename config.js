@@ -1,20 +1,24 @@
 // RunTrack site configuration.
 //
-// Optional accounts use Firebase Authentication (Email/Password) and Cloud
-// Firestore. These values identify the Firebase project behind this site. They
-// are public client identifiers, not secrets: firestore.rules decides who can
-// read and write data.
+// RunTrack runs in guest-only mode by default: plans and runs are saved in
+// this browser, the sign-in panel is hidden and the app never contacts
+// Firebase.
 //
-// Self-hosting: replace the values with the web app config from your own
-// Firebase project, or set `firebase: null` to run RunTrack in guest-only mode
-// with no accounts and no requests to Firebase.
+// Optional accounts use Firebase Authentication (Email/Password) and Cloud
+// Firestore. To turn them on, create your own Firebase project (see the
+// README) and replace `null` with its web app config:
+//
+//   firebase: {
+//     apiKey:            '...',
+//     authDomain:        '<project-id>.firebaseapp.com',
+//     projectId:         '<project-id>',
+//     storageBucket:     '<project-id>.firebasestorage.app',
+//     messagingSenderId: '...',
+//     appId:             '...'
+//   }
+//
+// These values are public client identifiers, not secrets: firestore.rules
+// decides who can read and write data.
 window.RUNTRACK_CONFIG = {
-  firebase: {
-    apiKey:            'AIzaSyDDJCkZCqO9IWX17zJV85i_X3sx_WOjLNY',
-    authDomain:        'runtrack404.firebaseapp.com',
-    projectId:         'runtrack404',
-    storageBucket:     'runtrack404.firebasestorage.app',
-    messagingSenderId: '97566338423',
-    appId:             '1:97566338423:web:15c3d19017028f1a0cc572'
-  }
+  firebase: null
 };
