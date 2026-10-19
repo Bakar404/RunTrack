@@ -419,6 +419,9 @@ function showLanding({ focusSignIn = false } = {}) {
   document.getElementById('accountPanel').hidden = !accountsEnabled();
   document.getElementById('guestStartBtn').textContent =
     session || hasGuestData() ? 'Continue as guest' : 'Start without an account';
+  document.getElementById('guestStartNote').textContent = accountsEnabled()
+    ? 'Free, with no sign-up. Your data stays on this device unless you sign in.'
+    : 'Free, with no sign-up. Your data stays on this device.';
   if (focusSignIn && accountsEnabled()) {
     const loginHidden = document.getElementById('loginForm').hidden;
     const field = document.getElementById(loginHidden ? 'registerUsername' : 'loginUsername');
