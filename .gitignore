@@ -11,6 +11,7 @@ Thumbs.db
 # Dependencies and build output
 node_modules/
 dist/
+_site/
 
 # Environment and secrets
 .env
