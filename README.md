@@ -1,8 +1,16 @@
 # RunTrack
 
-RunTrack is a free training planner and run log for people preparing for a race. Choose a 5K, 10K, half marathon or marathon, pick the days you can run, and RunTrack lays out a week-by-week plan of easy runs, long runs and a taper. Log each run and follow your progress on the dashboard and charts. It runs in your browser with no sign-up and no build step, and your data stays on your device unless you connect a Firebase project of your own to sync it.
+Plan your race training, log runs and track progress in your browser, with no sign-up required.
+
+[![Pages deployment](https://github.com/Bakar404/RunTrack/actions/workflows/pages.yml/badge.svg)](https://github.com/Bakar404/RunTrack/actions/workflows/pages.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Live demo](https://img.shields.io/badge/Live_demo-RunTrack-brightgreen)](https://bakar404.github.io/RunTrack/)
 
 ![RunTrack dashboard with a half marathon plan in progress](docs/screenshots/dashboard.png)
+
+**[Try the live demo](https://bakar404.github.io/RunTrack/)**
+
+RunTrack is a free training planner and run log for people preparing for a race. Choose a 5K, 10K, half marathon or marathon, pick the days you can run, and RunTrack lays out a week-by-week plan of easy runs, long runs and a taper. Log each run and follow your progress on the dashboard and charts. It runs in your browser with no sign-up and no build step, and your data stays on your device unless you connect a Firebase project of your own to sync it.
 
 | Build a plan | Follow the schedule |
 | --- | --- |
@@ -14,19 +22,46 @@ RunTrack is a free training planner and run log for people preparing for a race.
 
 <sub>Screenshots show guest mode with fictional demo data.</sub>
 
-## Run it locally
+## Try it locally
 
-RunTrack is a static site with nothing to install. Clone it and serve the folder with any static file server:
+RunTrack is a static site with nothing to install:
 
-```sh
-git clone https://github.com/Bakar404/RunTrack.git
-cd RunTrack
-python3 -m http.server 8000
-```
+1. Clone the repository and enter its folder:
 
-Then open http://localhost:8000. Serve it over http rather than opening `index.html` as a file, because sign-in and device connections need a real origin.
+   ```sh
+   git clone https://github.com/Bakar404/RunTrack.git
+   cd RunTrack
+   ```
+
+2. Serve it with any static file server, for example:
+
+   ```sh
+   python3 -m http.server 8000
+   ```
+
+3. Open http://localhost:8000 and choose **Start without an account**.
+
+Serve it over http rather than opening `index.html` as a file, because sign-in and device connections need a real origin.
 
 Out of the box RunTrack runs in guest-only mode and never contacts Firebase. Accounts and sync are optional and use a Firebase project of your own; see [Accounts with your own Firebase project](#accounts-with-your-own-firebase-project).
+
+## How it works
+
+`index.html` and `styles.css` provide the interface; `script.js` generates plans, logs runs and renders the dashboard. Guest plans and runs are saved in localStorage. Optional accounts load Firebase on demand and sync plans and runs to per-user Cloud Firestore collections, with an offline cache when supported. Guest and account storage are separate.
+
+```mermaid
+flowchart LR
+    App["RunTrack in your browser"] -->|Guest plans and runs| Local["localStorage"]
+    App <-->|Optional account sync| Firebase["Firebase Auth + Firestore"]
+    App -->|Optional: your API key + goal| AI["Anthropic Messages API"]
+    AI -->|Draft to review before saving| App
+    App <-->|Optional: OAuth PKCE, runs and heart rate| Fitbit["Fitbit Web API"]
+    App <-->|Optional: recovery and workouts, fetched directly| Whoop["Whoop API v2"]
+    App <-->|Whoop token exchange and refresh| Proxy["Your self-hosted Whoop token proxy"]
+    Proxy <-->|Adds your client secret| WhoopOAuth["Whoop OAuth token endpoint"]
+```
+
+The AI planner calls Anthropic directly from the browser using your own key. Fitbit connects directly using OAuth with PKCE; Whoop recovery and workouts are also fetched directly, but connecting Whoop requires a token proxy you host yourself to keep its client secret out of the browser. Keys and device tokens stay in the current browser profile and are never included in Firebase sync. There is no hosted RunTrack backend; the self-hosted token proxy is only needed if you choose to connect Whoop.
 
 ## Features
 
@@ -148,3 +183,7 @@ favicon.svg         App icon
 .nojekyll           Tells GitHub Pages to serve files as they are
 docs/screenshots/   Images used in this README
 ```
+
+## License
+
+Licensed under the [MIT License](LICENSE). Copyright (c) 2026 Ahmed Abdelsalam.
